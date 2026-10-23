@@ -1,11 +1,23 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
 app.use(cors());
+
+// 1. 啟用 Keep-Alive Agent 減少 TCP 握手次數，防範 503 限流
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+
+const axiosInstance = axios.create({
+    httpAgent,
+    httpsAgent,
+    timeout: 10000
+});
 
 // 模擬馬會瀏覽器請求標頭
 const hkjcHeaders = {
@@ -16,7 +28,7 @@ const hkjcHeaders = {
     'Referer': 'https://racing.hkjc.com/'
 };
 
-// 記憶體快取 (減少向馬會發送請求頻率)
+// 記憶體快取
 const oddsCache = {};
 
 app.get('/', (req, res) => {
@@ -56,15 +68,13 @@ app.get('/api/odds', async (req, res) => {
     const dateStr = req.query.date || '2026-10-25';
     const venueCode = req.query.venue || 'ST';
 
-    console.log(`[API /api/odds] Fetching meeting for Date: ${dateStr}, Venue: ${venueCode}`);
-
     const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-            const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 10000 });
+            const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
             const rawData = response.data;
             const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
 
@@ -118,15 +128,16 @@ app.get('/api/odds', async (req, res) => {
             if (attempt === 2) {
                 return res.status(502).json({
                     status: "error",
-                    message: "無法取得馬會伺服器數據 (Bad Gateway)。",
+                    message: "無法取得馬會伺服器數據。",
                     errorDetails: err.message
                 });
             }
+            await new Promise(r => setTimeout(r, 500)); // 重試前等待 0.5 秒
         }
     }
 });
 
-// 3. 專用實時賠率 API (非香港本地賽事自動延長快取，防止 502)
+// 3. 專用實時賠率 API (強效防 503 防護機制)
 app.get('/api/pool-odds', async (req, res) => {
     const dateStr = req.query.date;
     const venueCode = req.query.venue;
@@ -139,11 +150,12 @@ app.get('/api/pool-odds', async (req, res) => {
     const cacheKey = `${dateStr}_${venueCode}_${raceNo}`;
     const now = Date.now();
 
-    // 判斷是否為香港本地賽事 (沙田 ST 或 跑馬地 HV)
+    // 判斷是否為香港本地賽事 (ST 沙田 / HV 跑馬地)
     const isLocalMeeting = (venueCode === 'ST' || venueCode === 'HV');
-    // 非本地賽事（如 S1, S2 等海外賽事）馬匹多、流量大，快取設為 15 秒保護伺服器
-    const currentTTL = isLocalMeeting ? 8000 : 15000;
+    // 海外賽事快取延長至 12 秒，本地賽事 6 秒，減少撞馬會 API 頻率
+    const currentTTL = isLocalMeeting ? 6000 : 12000;
 
+    // 1. 如果在快取時間內，直接回傳快取，完全不打馬會
     if (oddsCache[cacheKey] && (now - oddsCache[cacheKey].timestamp < currentTTL)) {
         return res.json(oddsCache[cacheKey].data);
     }
@@ -161,12 +173,10 @@ app.get('/api/pool-odds', async (req, res) => {
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-            const response = await axios.get(graphqlUrl, {
-                headers: hkjcHeaders,
-                timeout: 12000
-            });
+            const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
 
             if (response.data && !response.data.errors) {
+                // 成功取得資料，更新快取
                 oddsCache[cacheKey] = {
                     timestamp: now,
                     data: response.data
@@ -175,17 +185,19 @@ app.get('/api/pool-odds', async (req, res) => {
             }
         } catch (err) {
             console.warn(`[Pool-Odds Attempt ${attempt} Failed for ${venueCode} R${raceNo}]: ${err.message}`);
-            
-            // 萬一連線失敗，優先回傳舊快取數據，防止拋出 502 影響前端
+
+            // 🔥 關鍵防護：如果遭遇 503/502，只要手上有舊快取，強行回傳舊快取數據，對外絕不吐出 503！
             if (oddsCache[cacheKey]) {
-                console.log(`[FALLBACK] Serving stale cache for ${cacheKey} due to network timeout.`);
+                console.log(`[503 PREVENTED] Serving fallback cache for ${cacheKey}`);
                 return res.json(oddsCache[cacheKey].data);
             }
 
-            if (attempt === 2) {
-                return res.status(502).json({
+            if (attempt === 1) {
+                await new Promise(r => setTimeout(r, 600)); // 首次失敗等 0.6 秒再重試
+            } else {
+                return res.status(503).json({
                     status: 'error',
-                    message: '連線馬會伺服器逾時或失敗 (Bad Gateway)',
+                    message: '馬會伺服器暫時繁忙 (503 Service Unavailable)',
                     errorDetails: err.message
                 });
             }
@@ -195,5 +207,5 @@ app.get('/api/pool-odds', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`HKJC Proxy Server running on port ${PORT}`);
+    console.log(`HKJC Proxy Server with Keep-Alive running on port ${PORT}`);
 });
