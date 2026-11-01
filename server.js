@@ -64,10 +64,12 @@ app.get('/api/meetings', (req, res) => {
 });
 
 // 2. 核心排位數據 API (已強化提取 postTime, raceClass, raceCourse, raceTrack)
+// 2. 核心排位數據 API (已修正 GraphQL Query 空格問題)
 app.get('/api/odds', async (req, res) => {
     const dateStr = req.query.date || '2026-10-25';
     const venueCode = req.query.venue || 'ST';
 
+    // 確保 ...raceFragment 與 runners 之間有正確的空格
     const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}}query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{...raceFragment runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
     
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
