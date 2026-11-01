@@ -38,11 +38,8 @@ app.get('/', (req, res) => {
 });
 
 // 1. 動態賽事選單 API (修復 400 錯誤：確保日期格式為 YYYYMMDD)
+// 1. 動態賽事選單 API (直接返回所有 status 為 DEFINED 的場次，取代手動 meetings.json)
 app.get('/api/meetings', async (req, res) => {
-    // 預設今天日期或接收查詢參數 (例如 2026-11-01 轉為 20261101)
-    const inputDate = req.query.date || new Date().toISOString().split('T')[0];
-    const formattedDate = inputDate.replace(/-/g, '');
-
     // 使用馬會標準的 activeMeetings 查詢
     const graphqlQuery = `query { activeMeetings: raceMeetings { id venueCode date status races { no postTime status wageringFieldSize } } }`;
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}`;
@@ -50,22 +47,29 @@ app.get('/api/meetings', async (req, res) => {
     try {
         const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
         const rawData = response.data;
+
+        if (rawData.errors) {
+            console.error('GraphQL Errors in /api/meetings:', rawData.errors);
+            throw new Error(rawData.errors[0]?.message || 'GraphQL query errors');
+        }
+
         const activeMeetings = rawData?.data?.activeMeetings || [];
 
-        // 動態整理出所有有效的場地賽事清單
-        const meetingsList = activeMeetings.map(m => ({
-            date: m.date,
-            venue: m.venueCode,
-            status: m.status,
-            name: `${m.date} ${m.venueCode} 賽事 (${m.status})`
-        }));
+        // 自動過濾出 status 為 DEFINED 的場次
+        const definedMeetings = activeMeetings
+            .filter(m => m.status === 'DEFINED')
+            .map(m => ({
+                id: m.id,
+                date: m.date,
+                venue: m.venueCode,
+                status: m.status,
+                name: `${m.date} ${m.venueCode} 賽事 (${m.status})`
+            }));
 
         return res.json({
             status: 'success',
-            targetDate: inputDate,
-            meetings: meetingsList.length > 0 ? meetingsList : [
-                { date: formattedDate, venue: "HV", status: "DEFINED", name: `${formattedDate} HV 賽事` }
-            ]
+            count: definedMeetings.length,
+            meetings: definedMeetings
         });
     } catch (err) {
         console.error('Error fetching dynamic meetings:', err.response?.data || err.message);
