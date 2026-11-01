@@ -38,11 +38,25 @@ app.get('/', (req, res) => {
 });
 
 // 1. 動態賽事選單 API (修復 400 錯誤：確保日期格式為 YYYYMMDD)
-// 1. 動態賽事選單 API (直接返回所有 status 為 DEFINED 的場次，取代手動 meetings.json)
+// 1. 動態賽事選單 API (使用標準 operationName 避開 400 錯誤)
 app.get('/api/meetings', async (req, res) => {
-    // 使用馬會標準的 activeMeetings 查詢
-    const graphqlQuery = `query { activeMeetings: raceMeetings { id venueCode date status races { no postTime status wageringFieldSize } } }`;
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}`;
+    // 嚴格對應馬會認可的 operationName 與查詢架構
+    const graphqlQuery = `query raceMeetings {
+        activeMeetings: raceMeetings {
+            id
+            venueCode
+            date
+            status
+            races {
+                no
+                postTime
+                status
+                wageringFieldSize
+            }
+        }
+    }`;
+    
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings`;
 
     try {
         const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
@@ -55,7 +69,7 @@ app.get('/api/meetings', async (req, res) => {
 
         const activeMeetings = rawData?.data?.activeMeetings || [];
 
-        // 自動過濾出 status 為 DEFINED 的場次
+        // 自動過濾出 status 為 DEFINED 的場次，完全取代手動 meetings.json
         const definedMeetings = activeMeetings
             .filter(m => m.status === 'DEFINED')
             .map(m => ({
