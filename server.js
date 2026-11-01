@@ -66,8 +66,6 @@ app.get('/api/meetings', (req, res) => {
 // 2. 核心排位數據 API (已強化提取 postTime, raceClass, raceCourse, raceTrack)
 const HKJC_GRAPHQL_URL = 'https://api.hkjc.com/v1/graphql'; // 範例網址，請換成你原本使用的
 
-const HKJC_GRAPHQL_URL = 'https://api.hkjc.com/v1/graphql';
-
 app.get('/api/odds', async (req, res) => {
     try {
         const { date, venueCode } = req.query;
