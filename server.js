@@ -64,11 +64,6 @@ app.get('/api/meetings', (req, res) => {
 });
 
 // 2. 核心排位數據 API (已強化提取 postTime, raceClass, raceCourse, raceTrack)
-const express = require('express');
-const axios = require('axios');
-const router = express.Router();
-
-// 馬會 GraphQL 端點（請根據你實際使用的 Endpoint 調整）
 const HKJC_GRAPHQL_URL = 'https://api.hkjc.com/v1/graphql'; // 範例網址，請換成你原本使用的
 
 router.get('/odds', async (req, res) => {
