@@ -3,8 +3,6 @@ const cors = require('cors');
 const axios = require('axios');
 const http = require('http');
 const https = require('https');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(cors());
@@ -23,7 +21,7 @@ const axiosInstance = axios.create({
 const hkjcHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en-US;q=0.7',
     'Origin': 'https://racing.hkjc.com',
     'Referer': 'https://racing.hkjc.com/'
 };
@@ -39,38 +37,52 @@ app.get('/', (req, res) => {
     });
 });
 
-// 1. 賽事選單 API (讀取 meetings.json)
-app.get('/api/meetings', (req, res) => {
+// 1. 動態賽事選單 API (取代原本需手動讀取的 meetings.json)
+app.get('/api/meetings', async (req, res) => {
+    const targetDate = req.query.date || new Date().toISOString().split('T')[0];
+
+    // 使用官方完整查詢以獲取 activeMeetings
+    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}} query raceMeetings($date:String,$venueCode:String){activeMeetings:raceMeetings{id venueCode date status races{no postTime status wageringFieldSize}} raceMeetings(date:$date,venueCode:\"HV\"){id status venueCode date totalNumberOfRace currentNumberOfRace dateOfWeek meetingType country{code namech nameen seq}races{...raceFragment runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
+    
+    const graphqlVariables = JSON.stringify({ date: targetDate.replace(/-/g, '') });
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings&variables=${encodeURIComponent(graphqlVariables)}`;
+
     try {
-        const filePath = path.join(__dirname, 'meetings.json');
-        if (fs.existsSync(filePath)) {
-            const rawData = fs.readFileSync(filePath, 'utf8');
-            const config = JSON.parse(rawData);
-            return res.json({ status: 'success', meetings: config.meetings || [] });
-        } else {
-            return res.json({
-                status: 'success',
-                meetings: [
-                    { date: "2026-10-24", venue: "S1", name: "2026-10-24 S1 賽事" },
-                    { date: "2026-10-25", venue: "ST", name: "2026-10-25 沙田 (ST)" },
-                    { date: "2026-10-25", venue: "S2", name: "2026-10-25 S2 賽事" }
-                ]
-            });
-        }
+        const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
+        const rawData = response.data;
+        const activeMeetings = rawData?.data?.activeMeetings || [];
+
+        // 動態整理出所有狀態為 DEFINED 或有效的場地賽事清單
+        const meetingsList = activeMeetings.map(m => ({
+            date: m.date,
+            venue: m.venueCode,
+            status: m.status,
+            name: `${m.date} ${m.venueCode} 賽事 (${m.status})`
+        }));
+
+        return res.json({
+            status: 'success',
+            targetDate: targetDate,
+            meetings: meetingsList.length > 0 ? meetingsList : [
+                { date: targetDate, venue: "HV", status: "DEFINED", name: `${targetDate} HV 賽事` }
+            ]
+        });
     } catch (err) {
-        console.error('Error reading meetings.json:', err.message);
+        console.error('Error fetching dynamic meetings:', err.message);
         return res.status(500).json({ status: 'error', message: err.message });
     }
 });
 
-// 2. 核心排位數據 API
+// 2. 升級版核心排位與賽事詳情 API (一併返回賽事與跑道細節，不含彩池投資)
 app.get('/api/odds', async (req, res) => {
-    const dateStr = req.query.date || '2026-10-25';
-    const venueCode = req.query.venue || 'ST';
+    const dateStr = req.query.date || '2026-11-01';
+    const venueCode = req.query.venue || 'HV';
 
-    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
+    // 包含完整賽事元數據、跑道細節與出馬表的查詢字串
+    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}} query raceMeetings($date:String,$venueCode:String){raceMeetings(date:$date,venueCode:$venueCode){id status venueCode date totalNumberOfRace currentNumberOfRace dateOfWeek meetingType country{code namech nameen seq}races{...raceFragment runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
+    
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings&variables=${encodeURIComponent(graphqlVariables)}`;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -81,7 +93,7 @@ app.get('/api/odds', async (req, res) => {
             if (!raceMeetings || raceMeetings.length === 0) {
                 return res.status(404).json({
                     status: "no_data",
-                    message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料或排位表。`,
+                    message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料或排位表。[cite: 2]`,
                     races: []
                 });
             }
@@ -89,6 +101,7 @@ app.get('/api/odds', async (req, res) => {
             const meeting = raceMeetings[0];
             const racesList = meeting.races || [];
 
+            // 結構化洗練賽事與排位資料
             const formattedRaces = racesList.map(race => {
                 const runners = (race.runners || []).map(r => ({
                     horseNo: r.no ?? r.saddleClothNo ?? "-",
@@ -102,6 +115,7 @@ app.get('/api/odds', async (req, res) => {
                     jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
                     trainer: r.trainer?.name_ch || r.trainer?.name_en || "-",
                     status: r.status || "NORMAL",
+                    standbyNo: r.standbyNo || null,
                     winOdds: "-",
                     plaOdds: "-"
                 }));
@@ -109,6 +123,16 @@ app.get('/api/odds', async (req, res) => {
                 return {
                     raceNo: race.no,
                     status: race.status || "SCHEDULED",
+                    raceName: race.raceName_ch || "",
+                    raceNameEn: race.raceName_en || "",
+                    postTime: race.postTime || "",
+                    distance: race.distance || "",
+                    raceClass: race.raceClass_ch || "",
+                    raceClassEn: race.raceClass_en || "",
+                    raceCourse: race.raceCourse?.description_ch || "",
+                    raceCourseCode: race.raceCourse?.displayCode || "",
+                    raceTrack: race.raceTrack?.description_ch || "",
+                    going: race.go_ch || "",
                     totalRunners: runners.length,
                     runners: runners
                 };
@@ -116,9 +140,12 @@ app.get('/api/odds', async (req, res) => {
 
             return res.json({
                 status: "success",
-                message: `成功取得馬會官方排位數據 (${dateStr})`,
+                message: `成功取得馬會官方賽事詳情與排位數據 (${dateStr})[cite: 2]`,
+                meetingId: meeting.id,
                 meetingDate: dateStr,
                 venue: venueCode,
+                meetingStatus: meeting.status,
+                totalNumberOfRace: meeting.totalNumberOfRace,
                 totalRaces: formattedRaces.length,
                 races: formattedRaces
             });
@@ -132,7 +159,7 @@ app.get('/api/odds', async (req, res) => {
                     errorDetails: err.message
                 });
             }
-            await new Promise(r => setTimeout(r, 500)); // 重試前等待 0.5 秒
+            await new Promise(r => setTimeout(r, 500));
         }
     }
 });
@@ -150,17 +177,14 @@ app.get('/api/pool-odds', async (req, res) => {
     const cacheKey = `${dateStr}_${venueCode}_${raceNo}`;
     const now = Date.now();
 
-    // 判斷是否為香港本地賽事 (ST 沙田 / HV 跑馬地)
     const isLocalMeeting = (venueCode === 'ST' || venueCode === 'HV');
-    // 海外賽事快取延長至 12 秒，本地賽事 6 秒，減少撞馬會 API 頻率
     const currentTTL = isLocalMeeting ? 6000 : 12000;
 
-    // 1. 如果在快取時間內，直接回傳快取，完全不打馬會
     if (oddsCache[cacheKey] && (now - oddsCache[cacheKey].timestamp < currentTTL)) {
         return res.json(oddsCache[cacheKey].data);
     }
 
-    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_ch name_en starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
+    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_en name_ch starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
     const graphqlVariables = JSON.stringify({
         date: dateStr,
@@ -176,7 +200,6 @@ app.get('/api/pool-odds', async (req, res) => {
             const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
 
             if (response.data && !response.data.errors) {
-                // 成功取得資料，更新快取
                 oddsCache[cacheKey] = {
                     timestamp: now,
                     data: response.data
@@ -186,14 +209,13 @@ app.get('/api/pool-odds', async (req, res) => {
         } catch (err) {
             console.warn(`[Pool-Odds Attempt ${attempt} Failed for ${venueCode} R${raceNo}]: ${err.message}`);
 
-            // 🔥 關鍵防護：如果遭遇 503/502，只要手上有舊快取，強行回傳舊快取數據，對外絕不吐出 503！
             if (oddsCache[cacheKey]) {
                 console.log(`[503 PREVENTED] Serving fallback cache for ${cacheKey}`);
                 return res.json(oddsCache[cacheKey].data);
             }
 
             if (attempt === 1) {
-                await new Promise(r => setTimeout(r, 600)); // 首次失敗等 0.6 秒再重試
+                await new Promise(r => setTimeout(r, 600));
             } else {
                 return res.status(503).json({
                     status: 'error',
@@ -205,7 +227,7 @@ app.get('/api/pool-odds', async (req, res) => {
     }
 });
 
-// 4. 多場次實時賠率 API (支援 raceNo=1-9、1,3,5 或單一場次)
+// 4. 多場次實時賠率 API
 app.get('/api/mutliPool-odds', async (req, res) => {
     const dateStr = req.query.date;
     const venueCode = req.query.venue;
@@ -215,7 +237,6 @@ app.get('/api/mutliPool-odds', async (req, res) => {
         return res.status(400).json({ status: 'error', message: 'Missing date or venue.' });
     }
 
-    // 解析場次參數（支援 "1-9" 範圍 或 "1,3,5" 逗號分隔）
     let raceNos = [];
     if (raceNoParam.includes('-')) {
         const [start, end] = raceNoParam.split('-').map(n => parseInt(n, 10));
@@ -231,11 +252,9 @@ app.get('/api/mutliPool-odds', async (req, res) => {
     const isLocalMeeting = (venueCode === 'ST' || venueCode === 'HV');
     const currentTTL = isLocalMeeting ? 6000 : 12000;
 
-    // 平行抓取所有請求的場次賠率（共用快取與防 503 機制）
     const results = await Promise.all(raceNos.map(async (raceNo) => {
         const cacheKey = `${dateStr}_${venueCode}_${raceNo}`;
 
-        // 1. 命中快取直接返回
         if (oddsCache[cacheKey] && (now - oddsCache[cacheKey].timestamp < currentTTL)) {
             return { raceNo, status: 'success', data: oddsCache[cacheKey].data };
         }
@@ -263,7 +282,6 @@ app.get('/api/mutliPool-odds', async (req, res) => {
                 }
             } catch (err) {
                 if (attempt === 2) {
-                    // 503 發生時若有舊快取則進行兜底
                     if (oddsCache[cacheKey]) {
                         return { raceNo, status: 'success_fallback', data: oddsCache[cacheKey].data };
                     }
