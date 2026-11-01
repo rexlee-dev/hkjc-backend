@@ -66,7 +66,9 @@ app.get('/api/meetings', (req, res) => {
 // 2. 核心排位數據 API (已強化提取 postTime, raceClass, raceCourse, raceTrack)
 const HKJC_GRAPHQL_URL = 'https://api.hkjc.com/v1/graphql'; // 範例網址，請換成你原本使用的
 
-router.get('/odds', async (req, res) => {
+const HKJC_GRAPHQL_URL = 'https://api.hkjc.com/v1/graphql';
+
+app.get('/api/odds', async (req, res) => {
     try {
         const { date, venueCode } = req.query;
 
@@ -99,7 +101,7 @@ router.get('/odds', async (req, res) => {
                 }
             `,
             variables: {
-                date: date || new Date().toISOString().split('T')[0].replace(/-/g, ''), // 預設為當天日期格式 YYYYMMDD
+                date: date || new Date().toISOString().split('T')[0].replace(/-/g, ''), // 預設當天日期 YYYYMMDD
                 venueCode: venueCode || null
             }
         };
@@ -110,7 +112,7 @@ router.get('/odds', async (req, res) => {
                 'Content-Type': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
             },
-            timeout: 8000 // 設 8 秒逾時
+            timeout: 8000 // 設 8 秒逾時保護
         });
 
         const data = response.data;
@@ -121,14 +123,14 @@ router.get('/odds', async (req, res) => {
 
         const rawMeetings = data.data?.raceMeetings || [];
 
-        // 3. 資料清洗與防禦性處理
+        // 3. 資料清洗與防禦性處理（防止空值、後備馬或時間戳記異常崩潰）
         const cleanedMeetings = rawMeetings.map(meeting => {
             return {
                 venueCode: meeting.venueCode,
                 meetingDate: meeting.meetingDate,
                 races: (meeting.races || []).map(race => {
                     
-                    // 過濾或處理出馬表 (runners)
+                    // 處理出馬表 (runners)
                     const processedRunners = (race.runners || []).map(runner => {
                         return {
                             no: runner.no || '',
@@ -136,7 +138,7 @@ router.get('/odds', async (req, res) => {
                             jockey: runner.jockey || '---',
                             trainer: runner.trainer || '---',
                             draw: runner.draw || null,
-                            status: runner.status || 'Declared', // 預設為出賽
+                            status: runner.status || 'Declared',
                             standbyNo: runner.standbyNo || null,
                             // 標記是否為正式出賽馬（排除 Standby 後備馬未補上的空號）
                             isDeclared: runner.status !== 'Standby' && !!runner.no
@@ -148,7 +150,7 @@ router.get('/odds', async (req, res) => {
                         return {
                             poolId: pool.poolId || '',
                             totalInvestment: pool.totalInvestment || 0,
-                            // 若 lastUpdateTime 為空，給予預設值或當前時間防錯
+                            // 若 lastUpdateTime 為空則給予預設當前時間
                             lastUpdateTime: pool.lastUpdateTime || new Date().toISOString()
                         };
                     });
