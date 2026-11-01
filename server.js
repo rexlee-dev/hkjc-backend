@@ -64,14 +64,11 @@ app.get('/api/meetings', (req, res) => {
 });
 
 // 2. 核心排位數據 API
-// 2. 核心排位數據 API (已成功加入賽事詳細元數據與跑道細節)
 app.get('/api/odds', async (req, res) => {
     const dateStr = req.query.date || '2026-10-25';
     const venueCode = req.query.venue || 'ST';
 
-    // 修正點：$date:String 和 $venueCode:String 之間加上了逗號
-    const graphqlQuery = `query racing($date:String, $venueCode:String){raceMeetings(date:$date, venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status raceName_ch postTime distance go_ch raceTrack{description_ch} raceCourse{description_ch displayCode} raceClass_ch runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
-    
+    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
@@ -112,15 +109,6 @@ app.get('/api/odds', async (req, res) => {
                 return {
                     raceNo: race.no,
                     status: race.status || "SCHEDULED",
-                    // 這裡對應把新增加的賽事與跑道細節導出返回
-                    raceName: race.raceName_ch || "",
-                    postTime: race.postTime || "",
-                    distance: race.distance || "",
-                    raceClass: race.raceClass_ch || "",
-                    going: race.go_ch || "",
-                    raceTrack: race.raceTrack?.description_ch || "",
-                    raceCourse: race.raceCourse?.description_ch || "",
-                    raceCourseCode: race.raceCourse?.displayCode || "",
                     totalRunners: runners.length,
                     runners: runners
                 };
@@ -128,7 +116,7 @@ app.get('/api/odds', async (req, res) => {
 
             return res.json({
                 status: "success",
-                message: `成功取得馬會官方排位與賽事詳細數據 (${dateStr})`,
+                message: `成功取得馬會官方排位數據 (${dateStr})`,
                 meetingDate: dateStr,
                 venue: venueCode,
                 totalRaces: formattedRaces.length,
@@ -144,7 +132,7 @@ app.get('/api/odds', async (req, res) => {
                     errorDetails: err.message
                 });
             }
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 500)); // 重試前等待 0.5 秒
         }
     }
 });
