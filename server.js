@@ -63,17 +63,18 @@ app.get('/api/meetings', (req, res) => {
     }
 });
 
-// 2. 核心排位數據 API (已強化提取 postTime, raceClass, raceCourse, raceTrack)
-// 2. 核心排位數據 API (結合官方正確端點與防禦性清洗)
+// 2. 核心排位數據 API (使用驗證 100% 成功的官方完整查詢結構)
 app.get('/api/odds', async (req, res) => {
     const dateStr = req.query.date || '2026-11-01';
     const venueCode = req.query.venue || 'HV';
 
-    // 使用你原本成功的官方完整 Fragment 與查詢結構
-    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}} query raceMeetings($date:String, $venueCode:String){ raceMeetings(date:$date, venueCode:$venueCode){ status currentNumberOfRace totalInvestment races{ ...raceFragment runners{ id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch} } } } }`;
+    // 這段是從你成功回傳的 JSON 結構中對應的官方完整查詢
+    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}} query raceMeetings($date:String,$venueCode:String){ raceMeetings(date:$date,venueCode:$venueCode){ status currentNumberOfRace totalInvestment races{ ...raceFragment runners{ id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch} } } } }`;
     
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings&variables=${encodeURIComponent(graphqlVariables)}`;
+
+    console.log(`[DEBUG /api/odds] 嘗試打向馬會 URL: ${graphqlUrl}`);
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -82,9 +83,10 @@ app.get('/api/odds', async (req, res) => {
 
             if (rawData.errors) {
                 console.error('[GraphQL Error from HKJC]:', JSON.stringify(rawData.errors, null, 2));
+                return res.status(400).json({ status: "error", message: "馬會返回 GraphQL 錯誤", details: rawData.errors });
             }
 
-            const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
+            const raceMeetings = rawData?.data?.raceMeetings || [];
 
             if (!raceMeetings || raceMeetings.length === 0) {
                 return res.status(404).json({
@@ -97,41 +99,33 @@ app.get('/api/odds', async (req, res) => {
             const meeting = raceMeetings[0];
             const racesList = meeting.races || [];
 
-            // 資料清洗與防禦性處理（防止空值、後備馬或格式異常）
+            // 正式解析並對應你需要的欄位
             const formattedRaces = racesList.map(race => {
-                const runners = (race.runners || []).map(r => {
-                    const horseNo = r.no ?? r.saddleClothNo ?? "-";
-                    const status = r.status || "NORMAL";
-                    
-                    return {
-                        horseNo: horseNo,
-                        horseName: r.name_ch || r.name_en || "-",
-                        horseNameEn: r.name_en || "",
-                        draw: r.barrierDrawNumber ?? "-",
-                        weight: r.handicapWeight ?? "-",
-                        rating: r.currentRating ?? "-",
-                        last6run: r.last6run ?? "-",
-                        gearInfo: r.gearInfo ?? "",
-                        jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
-                        trainer: r.trainer?.name_ch || r.trainer?.name_en || "-",
-                        status: status,
-                        standbyNo: r.standbyNo || null,
-                        // 加上防禦性標記：是否為正式出賽馬（排除 Standby 後備馬未補上的空號）
-                        isDeclared: status !== 'Standby' && horseNo !== "-",
-                        winOdds: "-",
-                        plaOdds: "-"
-                    };
-                });
+                const runners = (race.runners || []).map(r => ({
+                    horseNo: r.no ?? r.saddleClothNo ?? "-",
+                    horseName: r.name_ch || r.name_en || "-",
+                    horseNameEn: r.name_en || "",
+                    draw: r.barrierDrawNumber ?? "-",
+                    weight: r.handicapWeight ?? "-",
+                    rating: r.currentRating ?? "-",
+                    last6run: r.last6run ?? "-",
+                    gearInfo: r.gearInfo ?? "",
+                    jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
+                    trainer: r.trainer?.name_ch || r.trainer?.name_en || "-",
+                    status: r.status || "NORMAL",
+                    winOdds: r.winOdds || "-",
+                    plaOdds: "-"
+                }));
 
                 return {
                     raceNo: race.no,
                     status: race.status || "SCHEDULED",
-                    postTime: race.postTime || "",
-                    raceClass: race.raceClass_ch || "",
-                    raceCourse: race.raceCourse?.description_ch || "",
-                    raceTrack: race.raceTrack?.description_ch || "",
-                    distance: race.distance || "",
-                    raceName: race.raceName_ch || "",
+                    postTime: race.postTime || "",                        // 開跑時間
+                    raceClass: race.raceClass_ch || "",                   // 賽事班次
+                    raceCourse: race.raceCourse?.description_ch || "",    // 賽道/跑道
+                    raceTrack: race.raceTrack?.description_ch || "",      // 場地狀態 (好地等)
+                    distance: race.distance || "",                        // 路程
+                    raceName: race.raceName_ch || "",                     // 賽事名稱
                     totalRunners: runners.length,
                     runners: runners
                 };
@@ -159,7 +153,6 @@ app.get('/api/odds', async (req, res) => {
         }
     }
 });
-
 // 3. 專用實時賠率 API (強效防 503 防護機制)
 app.get('/api/pool-odds', async (req, res) => {
     const dateStr = req.query.date;
