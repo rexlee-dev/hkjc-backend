@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import axios from 'axios';
+// 引入根目錄的 meetings.json (Cloudflare Worker 支援 JSON module 導入)
+import meetingsConfig from './meetings.json';
 
 const app = new Hono();
 
@@ -24,42 +26,31 @@ app.get('/', (c) => {
     return c.json({
         status: 'online',
         serverTime: new Date().toISOString(),
-        message: 'HKJC Official GraphQL Multi-Meeting Odds Server (Cloudflare Worker) is running.2'
+        message: 'HKJC Official GraphQL Multi-Meeting Odds Server (Cloudflare Worker) is running.'
     });
 });
 
-// 1. 賽事選單 API
+// 1. 賽事選單 API (動態讀取 meetings.json)
 app.get('/api/meetings', (c) => {
-    return c.json({
-        status: 'success',
-        meetings: [
-            { date: "2026-11-04", venue: "HV", name: "2026-11-04 跑馬地 (HV)" },
-            { date: "2026-11-08", venue: "ST", name: "2026-11-08 沙田 (ST)" }
-        ]
-    });
-});
-
-app.get('/api/meetings2', (req, res) => {
     try {
-        const filePath = path.join(__dirname, 'meetings.json');
-        if (fs.existsSync(filePath)) {
-            const rawData = fs.readFileSync(filePath, 'utf8');
-            const config = JSON.parse(rawData);
-            return res.json({ status: 'success', meetings: config.meetings || [] });
-        } else {
-            return res.json({
-                status: 'success',
-                meetings: [
-                ]
-            });
-        }
+        const meetings = meetingsConfig.meetings || [];
+        return c.json({
+            status: 'success',
+            meetings: meetings
+        });
     } catch (err) {
-        console.error('Error reading meetings.json:', err.message);
-        return res.status(500).json({ status: 'error', message: err.message });
+        console.error('Error reading meetings data:', err.message);
+        return c.json({
+            status: 'success',
+            meetings: [
+                { date: "2026-11-04", venue: "HV", name: "2026-11-04 跑馬地 (HV)" },
+                { date: "2026-11-08", venue: "ST", name: "2026-11-08 沙田 (ST)" }
+            ]
+        });
     }
 });
 
-// 2. 核心排位數據 API (維持 YYYY-MM-DD 格式)
+// 2. 核心排位數據 API
 app.get('/api/odds', async (c) => {
     const dateStr = c.req.query('date') || '2026-11-04';
     const venueCode = c.req.query('venue') || 'HV';
@@ -133,8 +124,7 @@ app.get('/api/odds', async (c) => {
     }
 });
 
-// 3. 專用實時賠率 API (強效防 503 機制)
-// 3. 專用實時賠率 API
+// 3. 專用實時賠率 API (強效防 503 機制 + 修正 URL 拼湊方式)
 app.get('/api/pool-odds', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
@@ -156,25 +146,18 @@ app.get('/api/pool-odds', async (c) => {
 
     const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_en name_ch starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
-    const variablesObj = {
+    const graphqlVariables = JSON.stringify({
         date: dateStr,
         venueCode: venueCode,
         raceNo: raceNo,
         oddsTypes: ["WIN", "PLA"]
-    };
+    });
+
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=sp4e_racing_pmPool&variables=${encodeURIComponent(graphqlVariables)}`;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-            // 💡 關鍵修復：改用 params 讓 Axios 安全處理編碼，避免 JSON 變數被二次編碼
-            const response = await axios.get('https://info.cld.hkjc.com/graphql/base-get/', {
-                params: {
-                    query: graphqlQuery,
-                    operationName: 'sp4e_racing_pmPool',
-                    variables: JSON.stringify(variablesObj)
-                },
-                headers: hkjcHeaders,
-                timeout: 8000
-            });
+            const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
 
             if (response.data && !response.data.errors) {
                 oddsCache[cacheKey] = {
