@@ -51,9 +51,7 @@ app.get('/api/meetings', (req, res) => {
             return res.json({
                 status: 'success',
                 meetings: [
-                    { date: "2026-10-24", venue: "S1", name: "2026-10-24 S1 賽事" },
-                    { date: "2026-10-25", venue: "ST", name: "2026-10-25 沙田 (ST)" },
-                    { date: "2026-10-25", venue: "S2", name: "2026-10-25 S2 賽事" }
+                    { date: "2026-11-04", venue: "HV", name: "2026-11-04 跑馬地 (HV)" }
                 ]
             });
         }
@@ -63,25 +61,35 @@ app.get('/api/meetings', (req, res) => {
     }
 });
 
-// 2. 核心排位數據 API
+// 2. 核心排位數據 API (包含自動日期格式清洗與詳細 Debug 日誌)
 app.get('/api/odds', async (req, res) => {
-    const dateStr = req.query.date || '2026-10-25';
-    const venueCode = req.query.venue || 'ST';
+    const rawDate = req.query.date || '2026-11-04';
+    // 馬會 GraphQL 變數嚴格要求 8 位純數字格式 (例如: 20261104)
+    const dateStr = rawDate.replace(/-/g, ''); 
+    const venueCode = req.query.venue || 'HV';
 
     const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
+    console.log(`[HKJC Request] Raw Date: ${rawDate} -> Cleaned Date: ${dateStr}, Venue: ${venueCode}`);
+
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
             const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
             const rawData = response.data;
+
+            if (rawData.errors) {
+                console.error(`[HKJC GraphQL Error]:`, rawData.errors);
+                throw new Error(rawData.errors[0]?.message || 'GraphQL Query Error');
+            }
+
             const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
 
             if (!raceMeetings || raceMeetings.length === 0) {
                 return res.status(404).json({
                     status: "no_data",
-                    message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料或排位表。`,
+                    message: `馬會於 ${rawDate} (${venueCode}) 未有賽事資料或排位表。`,
                     races: []
                 });
             }
@@ -116,8 +124,8 @@ app.get('/api/odds', async (req, res) => {
 
             return res.json({
                 status: "success",
-                message: `成功取得馬會官方排位數據 (${dateStr})`,
-                meetingDate: dateStr,
+                message: `成功取得馬會官方排位數據 (${rawDate})`,
+                meetingDate: rawDate,
                 venue: venueCode,
                 totalRaces: formattedRaces.length,
                 races: formattedRaces
@@ -125,21 +133,28 @@ app.get('/api/odds', async (req, res) => {
 
         } catch (err) {
             console.warn(`[Odds Attempt ${attempt} Failed]: ${err.message}`);
+            if (err.response) {
+                console.error(`[HKJC Response Error Status]: ${err.response.status}`);
+                console.error(`[HKJC Response Error Data]:`, err.response.data);
+            }
+
             if (attempt === 2) {
                 return res.status(502).json({
                     status: "error",
                     message: "無法取得馬會伺服器數據。",
-                    errorDetails: err.message
+                    errorDetails: err.message,
+                    hkjcError: err.response?.data || null
                 });
             }
-            await new Promise(r => setTimeout(r, 500)); // 重試前等待 0.5 秒
+            await new Promise(r => setTimeout(r, 500));
         }
     }
 });
 
 // 3. 專用實時賠率 API (強效防 503 防護機制)
 app.get('/api/pool-odds', async (req, res) => {
-    const dateStr = req.query.date;
+    const rawDate = req.query.date;
+    const dateStr = rawDate ? rawDate.replace(/-/g, '') : null;
     const venueCode = req.query.venue;
     const raceNo = parseInt(req.query.raceNo, 10) || 1;
 
@@ -150,17 +165,14 @@ app.get('/api/pool-odds', async (req, res) => {
     const cacheKey = `${dateStr}_${venueCode}_${raceNo}`;
     const now = Date.now();
 
-    // 判斷是否為香港本地賽事 (ST 沙田 / HV 跑馬地)
     const isLocalMeeting = (venueCode === 'ST' || venueCode === 'HV');
-    // 海外賽事快取延長至 12 秒，本地賽事 6 秒，減少撞馬會 API 頻率
     const currentTTL = isLocalMeeting ? 6000 : 12000;
 
-    // 1. 如果在快取時間內，直接回傳快取，完全不打馬會
     if (oddsCache[cacheKey] && (now - oddsCache[cacheKey].timestamp < currentTTL)) {
         return res.json(oddsCache[cacheKey].data);
     }
 
-    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_ch name_en starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
+    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_en name_ch starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
     const graphqlVariables = JSON.stringify({
         date: dateStr,
@@ -176,7 +188,6 @@ app.get('/api/pool-odds', async (req, res) => {
             const response = await axiosInstance.get(graphqlUrl, { headers: hkjcHeaders });
 
             if (response.data && !response.data.errors) {
-                // 成功取得資料，更新快取
                 oddsCache[cacheKey] = {
                     timestamp: now,
                     data: response.data
@@ -186,14 +197,13 @@ app.get('/api/pool-odds', async (req, res) => {
         } catch (err) {
             console.warn(`[Pool-Odds Attempt ${attempt} Failed for ${venueCode} R${raceNo}]: ${err.message}`);
 
-            // 🔥 關鍵防護：如果遭遇 503/502，只要手上有舊快取，強行回傳舊快取數據，對外絕不吐出 503！
             if (oddsCache[cacheKey]) {
                 console.log(`[503 PREVENTED] Serving fallback cache for ${cacheKey}`);
                 return res.json(oddsCache[cacheKey].data);
             }
 
             if (attempt === 1) {
-                await new Promise(r => setTimeout(r, 600)); // 首次失敗等 0.6 秒再重試
+                await new Promise(r => setTimeout(r, 600));
             } else {
                 return res.status(503).json({
                     status: 'error',
@@ -205,9 +215,10 @@ app.get('/api/pool-odds', async (req, res) => {
     }
 });
 
-// 4. 多場次實時賠率 API (支援 raceNo=1-9、1,3,5 或單一場次)
+// 4. 多場次實時賠率 API
 app.get('/api/mutliPool-odds', async (req, res) => {
-    const dateStr = req.query.date;
+    const rawDate = req.query.date;
+    const dateStr = rawDate ? rawDate.replace(/-/g, '') : null;
     const venueCode = req.query.venue;
     const raceNoParam = req.query.raceNo || req.query.raceno || '1';
 
@@ -215,7 +226,6 @@ app.get('/api/mutliPool-odds', async (req, res) => {
         return res.status(400).json({ status: 'error', message: 'Missing date or venue.' });
     }
 
-    // 解析場次參數（支援 "1-9" 範圍 或 "1,3,5" 逗號分隔）
     let raceNos = [];
     if (raceNoParam.includes('-')) {
         const [start, end] = raceNoParam.split('-').map(n => parseInt(n, 10));
@@ -231,11 +241,9 @@ app.get('/api/mutliPool-odds', async (req, res) => {
     const isLocalMeeting = (venueCode === 'ST' || venueCode === 'HV');
     const currentTTL = isLocalMeeting ? 6000 : 12000;
 
-    // 平行抓取所有請求的場次賠率（共用快取與防 503 機制）
     const results = await Promise.all(raceNos.map(async (raceNo) => {
         const cacheKey = `${dateStr}_${venueCode}_${raceNo}`;
 
-        // 1. 命中快取直接返回
         if (oddsCache[cacheKey] && (now - oddsCache[cacheKey].timestamp < currentTTL)) {
             return { raceNo, status: 'success', data: oddsCache[cacheKey].data };
         }
@@ -263,7 +271,6 @@ app.get('/api/mutliPool-odds', async (req, res) => {
                 }
             } catch (err) {
                 if (attempt === 2) {
-                    // 503 發生時若有舊快取則進行兜底
                     if (oddsCache[cacheKey]) {
                         return { raceNo, status: 'success_fallback', data: oddsCache[cacheKey].data };
                     }
@@ -277,7 +284,7 @@ app.get('/api/mutliPool-odds', async (req, res) => {
 
     return res.json({
         status: 'success',
-        date: dateStr,
+        date: rawDate,
         venue: venueCode,
         racesOdds: results
     });
