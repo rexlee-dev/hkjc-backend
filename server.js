@@ -128,7 +128,7 @@ app.get('/api/odds', async (c) => {
 app.get('/api/pool-odds', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
-    const raceNo = parseInt(c.req.query('raceNo') || '1', 10);
+    const raceNo = parseInt(c.req.query('raceNo') || c.req.query('raceno') || '1', 10);
 
     if (!dateStr || !venueCode) {
         return c.json({ status: 'error', message: 'Missing date or venue.' }, 400);
