@@ -21,13 +21,15 @@ const axiosInstance = axios.create({
 
 // 模擬馬會瀏覽器請求標頭
 const hkjcHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8',
     'Origin': 'https://racing.hkjc.com',
-    'Referer': 'https://racing.hkjc.com/'
-};
-
+    'Referer': 'https://racing.hkjc.com/',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site'
+});
 // 記憶體快取
 const oddsCache = {};
 
