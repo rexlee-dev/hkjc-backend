@@ -124,7 +124,7 @@ app.get('/api/odds', async (c) => {
     }
 });
 
-// 3. 專用實時賠率 API (強效防 503 機制 + 修正 URL 拼湊方式)
+// 3. 專用實時賠率 API (使用已驗證 100% 成功的 Query)
 app.get('/api/pool-odds', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
@@ -144,7 +144,8 @@ app.get('/api/pool-odds', async (c) => {
         return c.json(oddsCache[cacheKey].data);
     }
 
-    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_en name_ch starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
+    // 💡 換上你剛才測試成功的完美 Query
+    const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_ch name_en starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
     const graphqlVariables = JSON.stringify({
         date: dateStr,
@@ -186,7 +187,7 @@ app.get('/api/pool-odds', async (c) => {
     }
 });
 
-// 4. 多場次實時賠率 API
+// 4. 多場次實時賠率 API (同步使用正確的 Query)
 app.get('/api/mutliPool-odds', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
@@ -218,7 +219,7 @@ app.get('/api/mutliPool-odds', async (c) => {
             return { raceNo, status: 'success', data: oddsCache[cacheKey].data };
         }
 
-        const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_en name_ch starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
+        const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_ch name_en starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
         const graphqlVariables = JSON.stringify({
             date: dateStr,
