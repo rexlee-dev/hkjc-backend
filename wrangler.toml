@@ -1,4 +1,4 @@
 name = "hkjc-worker"
-main = "src/index.js"
+main = "src/server.js"
 compatibility_date = "2026-11-03"
 compatibility_flags = ["nodejs_compat"]
