@@ -29,7 +29,7 @@ app.get('/', (c) => {
     return sendJson(c, {
         status: 'online',
         serverTime: new Date().toISOString(),
-        message: 'HKJC Official GraphQL Multi-Meeting Odds Server (Cloudflare Worker) is running.'
+        message: 'HKJC Official GraphQL Multi-Meeting Odds Server (Cloudflare Worker) is running222.'
     });
 });
 
