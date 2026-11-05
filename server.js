@@ -302,12 +302,18 @@ app.get('/api/scrape-race', async (c) => {
         const html = response.data;
         const $ = cheerio.load(html);
 
+       // 在後端 /api/scrape-race 裡面：
         const containerText = $('div.f_fs13').text();
         const raceName = $('div.f_fs13 span.font_wb').text().trim();
         const timeMatch = containerText.match(/(\d{2}:\d{2})/);
         const distanceMatch = containerText.match(/(\d+)\s*米/);
         const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|分級賽)/);
-
+        
+        // 💡 新增：解析賽道、評分、獎金
+        const trackMatch = containerText.match(/["“]([^"”]+)["”]\s*賽道/);
+        const ratingMatch = containerText.match(/評分[:\s]*([0-9\-\s]+)/);
+        const prizeMatch = containerText.match(/獎金[:\s]*(\$[0-9,]+)/);
+        
         const raceInfo = {
             type: 'local',
             venue: venue,
@@ -316,6 +322,9 @@ app.get('/api/scrape-race', async (c) => {
             postTime: timeMatch ? timeMatch[1] : '-',
             distance: distanceMatch ? distanceMatch[1] + '米' : '-',
             raceClass: classMatch ? classMatch[1] : '-',
+            track: trackMatch ? `${trackMatch[1]}賽道` : '-',
+            rating: ratingMatch ? `評分: ${ratingMatch[1].trim()}` : '-',
+            prize: prizeMatch ? `獎金: ${prizeMatch[1]}` : '-',
             rawText: containerText.trim()
         };
 
