@@ -302,19 +302,33 @@ app.get('/api/scrape-race', async (c) => {
         const html = response.data;
         const $ = cheerio.load(html);
 
-       // 在後端 /api/scrape-race 裡面：
         const containerText = $('div.f_fs13').text();
         const raceName = $('div.f_fs13 span.font_wb').text().trim();
         const timeMatch = containerText.match(/(\d{2}:\d{2})/);
         const distanceMatch = containerText.match(/(\d+)\s*米/);
-        const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|分級賽)/);
-        
-        // 💡 新增：解析賽道、評分、獎金
+
+        // 💡 修正：支援抓取「第X班」或者各類「分級賽 / 新馬賽 / 一級賽」等
+        const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|[\u4e00-\u9fa5]+級賽|[\u4e00-\u9fa5]+大賽)/);
+
+        // 💡 新增：抓取場地性質（草地 / 全天候跑道）
+        const surfaceMatch = containerText.match(/(\d{2}:\d{2})(草地|全天候跑道)/);
+        const surface = surfaceMatch ? surfaceMatch[2] : '';
+
+        // 賽道名稱 (如 C+3賽道)
         const trackMatch = containerText.match(/["“]([^"”]+)["”]\s*賽道/);
+        let trackDesc = trackMatch ? `${trackMatch[1]}賽道` : '-';
+        
+        // 如果有草地/全天候資訊，組合成更完整的描述 (例如：草地 / C+3賽道 或 全天候跑道)
+        if (surface) {
+            trackDesc = trackMatch ? `${surface} (${trackMatch[1]}賽道)` : surface;
+        }
+
         const ratingMatch = containerText.match(/評分[:\s]*([0-9\-\s]+)/);
+        
+        // 獎金清理結尾逗號
         const prizeMatch = containerText.match(/獎金[:\s]*(\$[0-9,]+)/);
         const cleanPrize = prizeMatch ? prizeMatch[1].replace(/,$/, '') : '-';
-        
+
         const raceInfo = {
             type: 'local',
             venue: venue,
@@ -322,8 +336,8 @@ app.get('/api/scrape-race', async (c) => {
             raceName: raceName || '-',
             postTime: timeMatch ? timeMatch[1] : '-',
             distance: distanceMatch ? distanceMatch[1] + '米' : '-',
-            raceClass: classMatch ? classMatch[1] : '-',
-            track: trackMatch ? `${trackMatch[1]}賽道` : '-',
+            raceClass: classMatch ? classMatch[0] : '-',
+            track: trackDesc,
             rating: ratingMatch ? `評分: ${ratingMatch[1].trim()}` : '-',
             prize: cleanPrize !== '-' ? `獎金: ${cleanPrize}` : '-',
             rawText: containerText.trim()
