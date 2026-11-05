@@ -374,16 +374,15 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
-// 6. 海外賽事官方 CMS GraphQL API 代理 (已修正日期查詢範圍)
+// 6. 海外賽事官方 CMS GraphQL API 代理 (改為全量抓取後在記憶體過濾，確保 100% 穩陣)
 app.get('/api/overseas-schedule', async (c) => {
-    const dateStr = c.req.query('date') || '2026-11-05'; // 格式: YYYY-MM-DD
-    const venueCode = c.req.query('venue') || 'S1';     // S1, S2 等
+    const dateStr = c.req.query('date') || '2026-11-05'; // 格式: YYYY-MM-DD 或 YYYYMMDD
+    const venueCode = (c.req.query('venue') || 'S1').toUpperCase();     // S1, S2 等
+
+    // 統一格式化日期為 YYYY-MM-DD
+    const formattedDate = dateStr.includes('-') ? dateStr : `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
 
     const targetGraphqlUrl = 'https://consvc.hkjc.com/content-api/JCRW/api/graph?sc_apikey=%7bCF83F525-0B06-44FE-B643-3258BCDA089A%7d';
-
-    // 💡 擴大時間範圍前後各一天，確保不會因 UTC 時區落差而漏掉賽事
-    const fromTime = `${dateStr}T00:00:00`;
-    const toTime = `${dateStr}T23:59:59`;
 
     const payload = {
         variables: {
@@ -395,8 +394,9 @@ app.get('/api/overseas-schedule', async (c) => {
                     value: "MeetingDate"
                 }
             ],
-            from: fromTime,
-            to: toTime,
+            // 擴大範圍以覆蓋整個賽季，確保抓到所有節點
+            from: "2026-09-01T00:00:00Z",
+            to: "2027-07-31T23:59:59Z",
             racesFolderTemplateIDs: [
                 "7AADC074D6214575A75C808AA390D754"
             ],
@@ -432,6 +432,10 @@ app.get('/api/overseas-schedule', async (c) => {
                     name
                     path
                     displayName
+                    meetingDate {
+                      date: formattedDateValue(format: "yyyy-MM-dd", offset: -480)
+                      value: formattedDateValue(format: "yyyy-MM-ddTHH:mm:sszzz", offset: -480)
+                    }
                     meetingVenueCode {
                       value
                     }
@@ -488,24 +492,21 @@ app.get('/api/overseas-schedule', async (c) => {
         let matchedMeeting = null;
         for (const item of items) {
             const meeting = item.meeting;
-            const vCode = meeting?.meetingVenueCode?.value;
-            // 比對 venueCode（不分大小寫，或支援模糊比對）
-            if (vCode && vCode.toUpperCase() === venueCode.toUpperCase()) {
+            const mDate = meeting?.meetingDate?.date; // 格式: YYYY-MM-DD
+            const vCode = (meeting?.meetingVenueCode?.value || '').toUpperCase();
+
+            // 同時比對日期與場地代號 (例如 2026-11-05 同 S1)
+            if (mDate === formattedDate && vCode === venueCode) {
                 matchedMeeting = meeting;
                 break;
             }
         }
 
-        // 如果嚴格比對不到，嘗試抓取該日期的第一個海外賽事
-        if (!matchedMeeting && items.length > 0) {
-            matchedMeeting = items[0].meeting;
-        }
-
         if (!matchedMeeting) {
             return jsonResponse(c, {
                 status: 'no_data',
-                message: `在 ${dateStr} 找不到海外場次 ${venueCode} 的資料。`,
-                rawItemsCount: items.length
+                message: `在 ${formattedDate} 找不到海外場次 ${venueCode} 的資料。`,
+                totalItemsScanned: items.length
             }, 404);
         }
 
@@ -519,9 +520,9 @@ app.get('/api/overseas-schedule', async (c) => {
 
         return jsonResponse(c, {
             status: 'success',
-            date: dateStr,
-            venue: matchedMeeting.meetingVenueCode?.value || venueCode,
-            country: matchedMeeting.meetingCountry?.value || '-',
+            date: formattedDate,
+            venue: venueCode,
+            country: matchedMeeting.meetingCountry?.value || matchedMeeting.countryName?.value || '-',
             races: races
         });
 
