@@ -306,6 +306,5 @@ app.get('/api/active-meetings', async (c) => {
         }
     }
 });
-});
 
 export default app;
