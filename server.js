@@ -7,7 +7,6 @@ import * as cheerio from 'cheerio';
 import meetingsConfig from './meetings.json';
 
 const app = new Hono();
-const cheerio = require('cheerio');
 
 // 啟用 CORS
 app.use('*', cors());
