@@ -313,6 +313,7 @@ app.get('/api/scrape-race', async (c) => {
         const trackMatch = containerText.match(/["“]([^"”]+)["”]\s*賽道/);
         const ratingMatch = containerText.match(/評分[:\s]*([0-9\-\s]+)/);
         const prizeMatch = containerText.match(/獎金[:\s]*(\$[0-9,]+)/);
+        const cleanPrize = prizeMatch ? prizeMatch[1].replace(/,$/, '') : '-';
         
         const raceInfo = {
             type: 'local',
@@ -324,7 +325,7 @@ app.get('/api/scrape-race', async (c) => {
             raceClass: classMatch ? classMatch[1] : '-',
             track: trackMatch ? `${trackMatch[1]}賽道` : '-',
             rating: ratingMatch ? `評分: ${ratingMatch[1].trim()}` : '-',
-            prize: prizeMatch ? `獎金: ${prizeMatch[1]}` : '-',
+            prize: cleanPrize !== '-' ? `獎金: ${cleanPrize}` : '-',
             rawText: containerText.trim()
         };
 
