@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
+
 // 引入根目錄的 meetings.json (Cloudflare Worker 支援 JSON module 導入)
 import meetingsConfig from './meetings.json';
 
 const app = new Hono();
+const cheerio = require('cheerio');
 
 // 啟用 CORS
 app.use('*', cors());
@@ -271,43 +274,88 @@ app.get('/api/mutliPool-odds', async (c) => {
     });
 });
 
-// 測試專用新 API (保留 /api/odds 不變)
-app.get('/api/test-query', async (c) => {
-    const dateStr = c.req.query('date') || '2026-11-05';
-    const venueCode = c.req.query('venue') || 'S1';
+// 爬取官方網頁賽事資訊的測試 API
+app.get('/api/scrape-race', async (c) => {
+    const dateStr = c.req.query('date') || '2026-11-08'; // 格式: YYYY-MM-DD
+    const venue = c.req.query('venue') || 'ST';     // ST, HV 或 S1 等
+    const raceNo = c.req.query('raceNo') || '1';
 
-    // 使用你親自驗證 100% 成功的完整 Query 結構
-    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}}fragment racingBlockFragment on RaceMeeting{jpEsts:pmPools(oddsTypes:[WIN PLA TCE TRI FF QTT DT TT SixUP]filters:["jackpot","estimatedDividend"]){leg{number races}oddsType jackpot estimatedDividend mergedPoolId}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]){id leg{races}}penetrometerReadings(filters:["first"]){reading readingTime}hammerReadings(filters:["first"]){reading readingTime}changeHistories(filters:["top3"]){type time raceNo runnerNo horseName_ch horseName_en jockeyName_ch jockeyName_en scratchHorseName_ch scratchHorseName_en handicapWeight scrResvIndicator}}query raceMeetings($date:String$venueCode:String){timeOffset{rc}activeMeetings:raceMeetings{id venueCode date status races{no postTime status wageringFieldSize}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]}{status}}raceMeetings(date:$date venueCode:$venueCode){id status venueCode date totalNumberOfRace currentNumberOfRace dateOfWeek meetingType totalInvestment country{code namech nameen seq}races{...raceFragment runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}obSt:pmPools(oddsTypes:[WIN PLA]){leg{races}oddsType comingleStatus}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]}{id leg{number races}status sellStatus oddsType investment mergedPoolId lastUpdateTime}...racingBlockFragment pmPools(oddsTypes:[]){id}jkcInstNo:foPools(oddsTypes:[JKC]filters:["top"]){instNo}tncInstNo:foPools(oddsTypes:[TNC]filters:["top"]){instNo}}}`;
-
-    const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings&variables=${encodeURIComponent(graphqlVariables)}`;
+    const isLocal = venue === 'ST' || venue === 'HV';
+    
+    // 根據本地或海外賽事組合正確的官方網址
+    let targetUrl = '';
+    if (isLocal) {
+        const dateSlash = dateStr.replace(/-/g, '/');
+        targetUrl = `https://racing.hkjc.com/zh-hk/local/information/racecard?racedate=${dateSlash}&Racecourse=${venue}&RaceNo=${raceNo}`;
+    } else {
+        const dateCompact = dateStr.replace(/-/g, '');
+        targetUrl = `https://racing.hkjc.com/zh-hk/overseas/race-card?RaceDate=${dateCompact}&Racecourse=${venue}&RaceNo=${raceNo}`;
+    }
 
     try {
-        const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
-        const rawData = response.data;
-        const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
+        // 發送請求取得 HTML，並帶上合適的 Headers 模擬瀏覽器
+        const response = await axios.get(targetUrl, { 
+            headers: {
+                ...hkjcHeaders,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+            }, 
+            timeout: 8000 
+        });
 
-        if (!raceMeetings || raceMeetings.length === 0) {
-            return jsonResponse(c, { status: "no_data", message: "未有賽事資料" }, 404);
+        const html = response.data;
+        const $ = cheerio.load(html);
+        
+        let raceInfo = {};
+
+        if (isLocal) {
+            // 解析本地賽事資訊 (對應圖1結構)
+            const containerText = $('div.f_fs13').text();
+            const raceName = $('div.f_fs13 span.font_wb').text().trim();
+            const timeMatch = containerText.match(/(\d{2}:\d{2})/);
+            const distanceMatch = containerText.match(/(\d+)\s*米/);
+            const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|分級賽)/);
+
+            raceInfo = {
+                type: 'local',
+                raceNo: raceNo,
+                raceName: raceName || '-',
+                postTime: timeMatch ? timeMatch[1] : '-',
+                distance: distanceMatch ? distanceMatch[1] + '米' : '-',
+                raceClass: classMatch ? classMatch[1] : '-',
+                rawText: containerText.trim()
+            };
+        } else {
+            // 解析海外賽事資訊 (對應圖2結構)[cite: 2]
+            const detailsText = $('#meetingDescDtls .meeting-info-content-text').text().trim();
+            const parts = detailsText.split(',').map(s => s.trim());
+
+            raceInfo = {
+                type: 'overseas',
+                raceNo: raceNo,
+                date: parts[0] || '-',
+                postTime: parts[1] || '-',
+                country: parts[2] || '-',
+                raceClass: parts[3] || '-',
+                distance: parts[4] || '-',
+                trackType: parts[5] || '-',
+                raceName: parts[6] || '-',
+                venueName: parts[7] || '-'
+            };
         }
 
-        // 抽取你想測試的新欄位 (例如每一場的開跑時間與場地狀況)
-        const testResult = raceMeetings[0].races.map(r => ({
-            raceNo: r.no,
-            postTime: r.postTime,
-            raceName: r.raceName_ch,
-            distance: r.distance,
-            raceClass: r.raceClass_ch,
-            raceTrack: r.raceTrack?.description_ch
-        }));
-
         return jsonResponse(c, {
-            status: "success",
-            testData: testResult
+            status: 'success',
+            targetUrl: targetUrl,
+            data: raceInfo
         });
 
     } catch (err) {
-        return jsonResponse(c, { status: "error", message: err.message }, 502);
+        console.warn(`[Scrape Error]: ${err.message}`);
+        return jsonResponse(c, { 
+            status: 'error', 
+            message: `無法抓取網頁資料: ${err.message}`,
+            url: targetUrl 
+        }, 502);
     }
 });
 
