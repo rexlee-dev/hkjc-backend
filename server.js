@@ -271,43 +271,43 @@ app.get('/api/mutliPool-odds', async (c) => {
     });
 });
 
-// 官方賽果與排位名次 API (使用你提供 100% 成功通過瀏覽器驗證的官方 Query)
-app.get('/api/results', async (c) => {
+// 測試專用新 API (保留 /api/odds 不變)
+app.get('/api/test-query', async (c) => {
     const dateStr = c.req.query('date') || '2026-11-05';
     const venueCode = c.req.query('venue') || 'S1';
 
-    // 💡 完整使用你提供並且在 Browser 成功行得通的官方 Query
-    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
+    // 使用你親自驗證 100% 成功的完整 Query 結構
+    const graphqlQuery = `fragment raceFragment on Race{id no status raceName_en raceName_ch postTime country_en country_ch distance wageringFieldSize go_en go_ch ratingType raceTrack{description_en description_ch}raceCourse{description_en description_ch displayCode}claCode raceClass_en raceClass_ch judgeSigns{value_en}}fragment racingBlockFragment on RaceMeeting{jpEsts:pmPools(oddsTypes:[WIN PLA TCE TRI FF QTT DT TT SixUP]filters:["jackpot","estimatedDividend"]){leg{number races}oddsType jackpot estimatedDividend mergedPoolId}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]){id leg{races}}penetrometerReadings(filters:["first"]){reading readingTime}hammerReadings(filters:["first"]){reading readingTime}changeHistories(filters:["top3"]){type time raceNo runnerNo horseName_ch horseName_en jockeyName_ch jockeyName_en scratchHorseName_ch scratchHorseName_en handicapWeight scrResvIndicator}}query raceMeetings($date:String$venueCode:String){timeOffset{rc}activeMeetings:raceMeetings{id venueCode date status races{no postTime status wageringFieldSize}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]}{status}}raceMeetings(date:$date venueCode:$venueCode){id status venueCode date totalNumberOfRace currentNumberOfRace dateOfWeek meetingType totalInvestment country{code namech nameen seq}races{...raceFragment runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}obSt:pmPools(oddsTypes:[WIN PLA]){leg{races}oddsType comingleStatus}poolInvs:pmPools(oddsTypes:[WIN PLA QIN QPL CWA CWB CWC IWN FCT TCE TRI FF QTT DBL TBL DT TT SixUP]}{id leg{number races}status sellStatus oddsType investment mergedPoolId lastUpdateTime}...racingBlockFragment pmPools(oddsTypes:[]){id}jkcInstNo:foPools(oddsTypes:[JKC]filters:["top"]){instNo}tncInstNo:foPools(oddsTypes:[TNC]filters:["top"]){instNo}}}`;
 
-    const graphqlVariables = JSON.stringify({
-        date: dateStr,
-        venueCode: venueCode
-    });
+    const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceMeetings&variables=${encodeURIComponent(graphqlVariables)}`;
 
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
+    try {
+        const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
+        const rawData = response.data;
+        const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-            const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
-            const rawData = response.data;
-
-            if (rawData && !rawData.errors) {
-                return jsonResponse(c, rawData);
-            }
-
-            throw new Error(rawData.errors?.[0]?.message || 'GraphQL Error');
-        } catch (err) {
-            console.warn(`[Results Attempt ${attempt} Failed]: ${err.message}`);
-
-            if (attempt === 2) {
-                return jsonResponse(c, {
-                    status: 'error',
-                    message: '無法取得馬會賽果數據。',
-                    errorDetails: err.message
-                }, 502);
-            }
-            await new Promise(r => setTimeout(r, 500));
+        if (!raceMeetings || raceMeetings.length === 0) {
+            return jsonResponse(c, { status: "no_data", message: "未有賽事資料" }, 404);
         }
+
+        // 抽取你想測試的新欄位 (例如每一場的開跑時間與場地狀況)
+        const testResult = raceMeetings[0].races.map(r => ({
+            raceNo: r.no,
+            postTime: r.postTime,
+            raceName: r.raceName_ch,
+            distance: r.distance,
+            raceClass: r.raceClass_ch,
+            raceTrack: r.raceTrack?.description_ch
+        }));
+
+        return jsonResponse(c, {
+            status: "success",
+            testData: testResult
+        });
+
+    } catch (err) {
+        return jsonResponse(c, { status: "error", message: err.message }, 502);
     }
 });
 
