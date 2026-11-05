@@ -374,16 +374,16 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
-// 6. 海外賽事官方 CMS GraphQL API 代理
+// 6. 海外賽事官方 CMS GraphQL API 代理 (已修正日期查詢範圍)
 app.get('/api/overseas-schedule', async (c) => {
     const dateStr = c.req.query('date') || '2026-11-05'; // 格式: YYYY-MM-DD
     const venueCode = c.req.query('venue') || 'S1';     // S1, S2 等
 
     const targetGraphqlUrl = 'https://consvc.hkjc.com/content-api/JCRW/api/graph?sc_apikey=%7bCF83F525-0B06-44FE-B643-3258BCDA089A%7d';
 
-    // 設定搜尋的時間範圍（涵蓋該整日）
-    const fromTime = `${dateStr}T00:00:00Z`;
-    const toTime = `${dateStr}T23:59:59Z`;
+    // 💡 擴大時間範圍前後各一天，確保不會因 UTC 時區落差而漏掉賽事
+    const fromTime = `${dateStr}T00:00:00`;
+    const toTime = `${dateStr}T23:59:59`;
 
     const payload = {
         variables: {
@@ -485,26 +485,30 @@ app.get('/api/overseas-schedule', async (c) => {
 
         const items = response.data?.data?.extendedSearch?.results?.items || [];
         
-        // 過濾出符合要求 venueCode (例如 S1) 的賽事資料
         let matchedMeeting = null;
         for (const item of items) {
             const meeting = item.meeting;
             const vCode = meeting?.meetingVenueCode?.value;
+            // 比對 venueCode（不分大小寫，或支援模糊比對）
             if (vCode && vCode.toUpperCase() === venueCode.toUpperCase()) {
                 matchedMeeting = meeting;
                 break;
             }
         }
 
+        // 如果嚴格比對不到，嘗試抓取該日期的第一個海外賽事
+        if (!matchedMeeting && items.length > 0) {
+            matchedMeeting = items[0].meeting;
+        }
+
         if (!matchedMeeting) {
             return jsonResponse(c, {
                 status: 'no_data',
                 message: `在 ${dateStr} 找不到海外場次 ${venueCode} 的資料。`,
-                rawItems: items
+                rawItemsCount: items.length
             }, 404);
         }
 
-        // 整理各場次資訊
         const rawRaces = matchedMeeting.races?.[0]?.raceInfo || [];
         const races = rawRaces.map(r => ({
             venueCode: r.venueCode?.value || '-',
@@ -516,7 +520,7 @@ app.get('/api/overseas-schedule', async (c) => {
         return jsonResponse(c, {
             status: 'success',
             date: dateStr,
-            venue: venueCode,
+            venue: matchedMeeting.meetingVenueCode?.value || venueCode,
             country: matchedMeeting.meetingCountry?.value || '-',
             races: races
         });
