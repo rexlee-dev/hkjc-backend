@@ -324,21 +324,37 @@ app.get('/api/scrape-race', async (c) => {
                 rawText: containerText.trim()
             };
         } else {
-            // 解析海外賽事資訊 (對應圖2結構)[cite: 2]
-            const detailsText = $('#meetingDescDtls .meeting-info-content-text').text().trim();
-            const parts = detailsText.split(',').map(s => s.trim());
+            // 海外賽事：嘗試抓取頁面中的賽事標題與描述文字
+            // 馬會海外賽事頁面通常會有一段包含賽事名稱、途程、場地及時間的文字
+            let overseasText = '';
+            
+            // 尋找包含賽事資訊的主體文字區塊
+            // 根據頁面結構，通常可以從標題或特定 class 中提取
+            const possibleSelectors = [
+                '.f_fs13', 
+                '.meeting-info-content', 
+                'td.f_fs13',
+                'font'
+            ];
+
+            // 抓取頁面上所有可能的文字，或者直接抽取包含日期/時間的字串
+            let foundDetails = '';
+            $('div, span, td').each((i, el) => {
+                const text = $(el).text().trim();
+                // 憑經驗尋找同時包含「米」同日期格式或時間格式嘅文字行
+                if ((text.includes('米') && text.includes('草地')) || (text.includes('/') && text.includes(':'))) {
+                    if (text.length < 150 && text.length > 10) {
+                        foundDetails = text;
+                        return false; // break loop
+                    }
+                }
+            });
 
             raceInfo = {
                 type: 'overseas',
                 raceNo: raceNo,
-                date: parts[0] || '-',
-                postTime: parts[1] || '-',
-                country: parts[2] || '-',
-                raceClass: parts[3] || '-',
-                distance: parts[4] || '-',
-                trackType: parts[5] || '-',
-                raceName: parts[6] || '-',
-                venueName: parts[7] || '-'
+                rawText: foundDetails || '未能直接捕捉詳情文字',
+                targetUrl: targetUrl
             };
         }
 
