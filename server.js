@@ -269,4 +269,45 @@ app.get('/api/mutliPool-odds', async (c) => {
     });
 });
 
+// 5. 官方賽果與派彩數據 API
+app.get('/api/results', async (c) => {
+    const dateStr = c.req.query('date');
+    const venueCode = c.req.query('venue');
+
+    if (!dateStr || !venueCode) {
+        return jsonResponse(c, { status: 'error', message: 'Missing date or venue.' }, 400);
+    }
+
+    // 馬會官方獲取賽果及派彩的 GraphQL Query
+    const graphqlQuery = `query raceResults($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status venueCode date races{no status raceName_ch raceName_en distance judgeSigns{value_en}runners{no name_ch name_en status finalPosition deadHeat winOdds}pmPools(oddsTypes:[WIN PLA QIN QPL]){oddsType status results{combString dividendValue combination}}}}}`;
+
+    const graphqlVariables = JSON.stringify({
+        date: dateStr,
+        venueCode: venueCode
+    });
+
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceResults&variables=${encodeURIComponent(graphqlVariables)}`;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+            const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
+            const rawData = response.data;
+
+            if (rawData && !rawData.errors) {
+                return jsonResponse(c, rawData);
+            }
+        } catch (err) {
+            console.warn(`[Results Attempt ${attempt} Failed for ${venueCode} on ${dateStr}]: ${err.message}`);
+
+            if (attempt === 2) {
+                return jsonResponse(c, {
+                    status: 'error',
+                    message: '無法取得馬會賽果數據。',
+                    errorDetails: err.message
+                }, 502);
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+    }
+});
 export default app;
