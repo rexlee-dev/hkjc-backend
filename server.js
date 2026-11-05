@@ -273,26 +273,24 @@ app.get('/api/mutliPool-odds', async (c) => {
     });
 });
 
-// 爬取官方網頁賽事資訊的測試 API
+// 5. 爬取官方網頁本地賽事資訊 API (專注處理 ST / HV)
 app.get('/api/scrape-race', async (c) => {
     const dateStr = c.req.query('date') || '2026-11-08'; // 格式: YYYY-MM-DD
-    const venue = c.req.query('venue') || 'ST';     // ST, HV 或 S1 等
+    const venue = (c.req.query('venue') || 'ST').toUpperCase();
     const raceNo = c.req.query('raceNo') || '1';
 
-    const isLocal = venue === 'ST' || venue === 'HV';
-    
-    // 根據本地或海外賽事組合正確的官方網址
-    let targetUrl = '';
-    if (isLocal) {
-        const dateSlash = dateStr.replace(/-/g, '/');
-        targetUrl = `https://racing.hkjc.com/zh-hk/local/information/racecard?racedate=${dateSlash}&Racecourse=${venue}&RaceNo=${raceNo}`;
-    } else {
-        const dateCompact = dateStr.replace(/-/g, '');
-        targetUrl = `https://racing.hkjc.com/zh-hk/overseas/race-card?RaceDate=${dateCompact}&Racecourse=${venue}&RaceNo=${raceNo}`;
+    // 檢查是否為本地賽事
+    if (venue !== 'ST' && venue !== 'HV') {
+        return jsonResponse(c, {
+            status: 'error',
+            message: '此 Endpoint 現僅支援本地賽事 (ST 或 HV)。'
+        }, 400);
     }
 
+    const dateSlash = dateStr.replace(/-/g, '/');
+    const targetUrl = `https://racing.hkjc.com/zh-hk/local/information/racecard?racedate=${dateSlash}&Racecourse=${venue}&RaceNo=${raceNo}`;
+
     try {
-        // 發送請求取得 HTML，並帶上合適的 Headers 模擬瀏覽器
         const response = await axios.get(targetUrl, { 
             headers: {
                 ...hkjcHeaders,
@@ -303,60 +301,23 @@ app.get('/api/scrape-race', async (c) => {
 
         const html = response.data;
         const $ = cheerio.load(html);
-        
-        let raceInfo = {};
 
-        if (isLocal) {
-            // 解析本地賽事資訊 (對應圖1結構)
-            const containerText = $('div.f_fs13').text();
-            const raceName = $('div.f_fs13 span.font_wb').text().trim();
-            const timeMatch = containerText.match(/(\d{2}:\d{2})/);
-            const distanceMatch = containerText.match(/(\d+)\s*米/);
-            const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|分級賽)/);
+        const containerText = $('div.f_fs13').text();
+        const raceName = $('div.f_fs13 span.font_wb').text().trim();
+        const timeMatch = containerText.match(/(\d{2}:\d{2})/);
+        const distanceMatch = containerText.match(/(\d+)\s*米/);
+        const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|分級賽)/);
 
-            raceInfo = {
-                type: 'local',
-                raceNo: raceNo,
-                raceName: raceName || '-',
-                postTime: timeMatch ? timeMatch[1] : '-',
-                distance: distanceMatch ? distanceMatch[1] + '米' : '-',
-                raceClass: classMatch ? classMatch[1] : '-',
-                rawText: containerText.trim()
-            };
-        } else {
-            // 海外賽事：嘗試抓取頁面中的賽事標題與描述文字
-            // 馬會海外賽事頁面通常會有一段包含賽事名稱、途程、場地及時間的文字
-            let overseasText = '';
-            
-            // 尋找包含賽事資訊的主體文字區塊
-            // 根據頁面結構，通常可以從標題或特定 class 中提取
-            const possibleSelectors = [
-                '.f_fs13', 
-                '.meeting-info-content', 
-                'td.f_fs13',
-                'font'
-            ];
-
-            // 抓取頁面上所有可能的文字，或者直接抽取包含日期/時間的字串
-            let foundDetails = '';
-            $('div, span, td').each((i, el) => {
-                const text = $(el).text().trim();
-                // 憑經驗尋找同時包含「米」同日期格式或時間格式嘅文字行
-                if ((text.includes('米') && text.includes('草地')) || (text.includes('/') && text.includes(':'))) {
-                    if (text.length < 150 && text.length > 10) {
-                        foundDetails = text;
-                        return false; // break loop
-                    }
-                }
-            });
-
-            raceInfo = {
-                type: 'overseas',
-                raceNo: raceNo,
-                rawText: foundDetails || '未能直接捕捉詳情文字',
-                targetUrl: targetUrl
-            };
-        }
+        const raceInfo = {
+            type: 'local',
+            venue: venue,
+            raceNo: raceNo,
+            raceName: raceName || '-',
+            postTime: timeMatch ? timeMatch[1] : '-',
+            distance: distanceMatch ? distanceMatch[1] + '米' : '-',
+            raceClass: classMatch ? classMatch[1] : '-',
+            rawText: containerText.trim()
+        };
 
         return jsonResponse(c, {
             status: 'success',
@@ -370,167 +331,6 @@ app.get('/api/scrape-race', async (c) => {
             status: 'error', 
             message: `無法抓取網頁資料: ${err.message}`,
             url: targetUrl 
-        }, 502);
-    }
-});
-
-// 6. 海外賽事官方 CMS GraphQL API 代理 (改為全量抓取後在記憶體過濾，確保 100% 穩陣)
-app.get('/api/overseas-schedule', async (c) => {
-    const dateStr = c.req.query('date') || '2026-11-05'; // 格式: YYYY-MM-DD 或 YYYYMMDD
-    const venueCode = (c.req.query('venue') || 'S1').toUpperCase();     // S1, S2 等
-
-    // 統一格式化日期為 YYYY-MM-DD
-    const formattedDate = dateStr.includes('-') ? dateStr : `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
-
-    const targetGraphqlUrl = 'https://consvc.hkjc.com/content-api/JCRW/api/graph?sc_apikey=%7bCF83F525-0B06-44FE-B643-3258BCDA089A%7d';
-
-    const payload = {
-        variables: {
-            path: "/sitecore/content/Sites/JCRW/Meetings/Simulcast",
-            language: "zh-hk",
-            fieldsEqual: [
-                {
-                    name: "_templateName",
-                    value: "MeetingDate"
-                }
-            ],
-            // 擴大範圍以覆蓋整個賽季，確保抓到所有節點
-            from: "2026-09-01T00:00:00Z",
-            to: "2027-07-31T23:59:59Z",
-            racesFolderTemplateIDs: [
-                "7AADC074D6214575A75C808AA390D754"
-            ],
-            entriesFolderTemplateIDs: [
-                "D28C1A7DE27245A3BD0FEC767C970347"
-            ]
-        },
-        query: `
-        query getUpcomingRaceCMS(
-          $path: String
-          $language: String
-          $fieldsEqual: [ItemSearchFieldQuery]
-          $from: String
-          $to: String
-          $racesFolderTemplateIDs: [String]
-          $entriesFolderTemplateIDs: [String]
-        ) {
-          extendedSearch(
-            fieldsEqual: $fieldsEqual
-            rootItem: $path
-            language: $language
-            dateFrom: $from
-            dateTo: $to
-            fieldName: "MeetingDate"
-            sortBy: "MeetingDate"
-            sortDesc: false
-          ) {
-            results {
-              items {
-                meeting: item {
-                  ... on MeetingDate {
-                    id
-                    name
-                    path
-                    displayName
-                    meetingDate {
-                      date: formattedDateValue(format: "yyyy-MM-dd", offset: -480)
-                      value: formattedDateValue(format: "yyyy-MM-ddTHH:mm:sszzz", offset: -480)
-                    }
-                    meetingVenueCode {
-                      value
-                    }
-                    meetingCountry {
-                      value
-                    }
-                    countryName {
-                      value
-                    }
-                    races: children(includeTemplateIDs: $racesFolderTemplateIDs) {
-                      raceInfo: children {
-                        ... on Race {
-                          displayName
-                          venueCode {
-                            value
-                          }
-                          raceName {
-                            value
-                          }
-                          raceDatetime {
-                            value: formattedDateValue(
-                              format: "yyyy-MM-ddTHH:mm:sszzz"
-                              offset: -480
-                            )
-                          }
-                          raceDistance {
-                            value
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        `
-    };
-
-    try {
-        const response = await axios.post(targetGraphqlUrl, payload, {
-            headers: {
-                ...hkjcHeaders,
-                'Content-Type': 'application/json',
-                'Origin': 'https://racing.hkjc.com',
-                'Referer': 'https://racing.hkjc.com/'
-            },
-            timeout: 8000
-        });
-
-        const items = response.data?.data?.extendedSearch?.results?.items || [];
-        
-        let matchedMeeting = null;
-        for (const item of items) {
-            const meeting = item.meeting;
-            const mDate = meeting?.meetingDate?.date; // 格式: YYYY-MM-DD
-            const vCode = (meeting?.meetingVenueCode?.value || '').toUpperCase();
-
-            // 同時比對日期與場地代號 (例如 2026-11-05 同 S1)
-            if (mDate === formattedDate && vCode === venueCode) {
-                matchedMeeting = meeting;
-                break;
-            }
-        }
-
-        if (!matchedMeeting) {
-            return jsonResponse(c, {
-                status: 'no_data',
-                message: `在 ${formattedDate} 找不到海外場次 ${venueCode} 的資料。`,
-                totalItemsScanned: items.length
-            }, 404);
-        }
-
-        const rawRaces = matchedMeeting.races?.[0]?.raceInfo || [];
-        const races = rawRaces.map(r => ({
-            venueCode: r.venueCode?.value || '-',
-            raceName: r.raceName?.value || '-',
-            raceDatetime: r.raceDatetime?.value || '-',
-            raceDistance: r.raceDistance?.value || '-'
-        }));
-
-        return jsonResponse(c, {
-            status: 'success',
-            date: formattedDate,
-            venue: venueCode,
-            country: matchedMeeting.meetingCountry?.value || matchedMeeting.countryName?.value || '-',
-            races: races
-        });
-
-    } catch (err) {
-        console.warn(`[Overseas CMS Error]: ${err.message}`);
-        return jsonResponse(c, {
-            status: 'error',
-            message: `無法取得海外賽事 CMS 數據: ${err.message}`
         }, 502);
     }
 });
