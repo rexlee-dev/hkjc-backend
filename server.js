@@ -374,4 +374,160 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
+// 6. 海外賽事官方 CMS GraphQL API 代理
+app.get('/api/overseas-schedule', async (c) => {
+    const dateStr = c.req.query('date') || '2026-11-05'; // 格式: YYYY-MM-DD
+    const venueCode = c.req.query('venue') || 'S1';     // S1, S2 等
+
+    const targetGraphqlUrl = 'https://consvc.hkjc.com/content-api/JCRW/api/graph?sc_apikey=%7bCF83F525-0B06-44FE-B643-3258BCDA089A%7d';
+
+    // 設定搜尋的時間範圍（涵蓋該整日）
+    const fromTime = `${dateStr}T00:00:00Z`;
+    const toTime = `${dateStr}T23:59:59Z`;
+
+    const payload = {
+        variables: {
+            path: "/sitecore/content/Sites/JCRW/Meetings/Simulcast",
+            language: "zh-hk",
+            fieldsEqual: [
+                {
+                    name: "_templateName",
+                    value: "MeetingDate"
+                }
+            ],
+            from: fromTime,
+            to: toTime,
+            racesFolderTemplateIDs: [
+                "7AADC074D6214575A75C808AA390D754"
+            ],
+            entriesFolderTemplateIDs: [
+                "D28C1A7DE27245A3BD0FEC767C970347"
+            ]
+        },
+        query: `
+        query getUpcomingRaceCMS(
+          $path: String
+          $language: String
+          $fieldsEqual: [ItemSearchFieldQuery]
+          $from: String
+          $to: String
+          $racesFolderTemplateIDs: [String]
+          $entriesFolderTemplateIDs: [String]
+        ) {
+          extendedSearch(
+            fieldsEqual: $fieldsEqual
+            rootItem: $path
+            language: $language
+            dateFrom: $from
+            dateTo: $to
+            fieldName: "MeetingDate"
+            sortBy: "MeetingDate"
+            sortDesc: false
+          ) {
+            results {
+              items {
+                meeting: item {
+                  ... on MeetingDate {
+                    id
+                    name
+                    path
+                    displayName
+                    meetingVenueCode {
+                      value
+                    }
+                    meetingCountry {
+                      value
+                    }
+                    countryName {
+                      value
+                    }
+                    races: children(includeTemplateIDs: $racesFolderTemplateIDs) {
+                      raceInfo: children {
+                        ... on Race {
+                          displayName
+                          venueCode {
+                            value
+                          }
+                          raceName {
+                            value
+                          }
+                          raceDatetime {
+                            value: formattedDateValue(
+                              format: "yyyy-MM-ddTHH:mm:sszzz"
+                              offset: -480
+                            )
+                          }
+                          raceDistance {
+                            value
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        `
+    };
+
+    try {
+        const response = await axios.post(targetGraphqlUrl, payload, {
+            headers: {
+                ...hkjcHeaders,
+                'Content-Type': 'application/json',
+                'Origin': 'https://racing.hkjc.com',
+                'Referer': 'https://racing.hkjc.com/'
+            },
+            timeout: 8000
+        });
+
+        const items = response.data?.data?.extendedSearch?.results?.items || [];
+        
+        // 過濾出符合要求 venueCode (例如 S1) 的賽事資料
+        let matchedMeeting = null;
+        for (const item of items) {
+            const meeting = item.meeting;
+            const vCode = meeting?.meetingVenueCode?.value;
+            if (vCode && vCode.toUpperCase() === venueCode.toUpperCase()) {
+                matchedMeeting = meeting;
+                break;
+            }
+        }
+
+        if (!matchedMeeting) {
+            return jsonResponse(c, {
+                status: 'no_data',
+                message: `在 ${dateStr} 找不到海外場次 ${venueCode} 的資料。`,
+                rawItems: items
+            }, 404);
+        }
+
+        // 整理各場次資訊
+        const rawRaces = matchedMeeting.races?.[0]?.raceInfo || [];
+        const races = rawRaces.map(r => ({
+            venueCode: r.venueCode?.value || '-',
+            raceName: r.raceName?.value || '-',
+            raceDatetime: r.raceDatetime?.value || '-',
+            raceDistance: r.raceDistance?.value || '-'
+        }));
+
+        return jsonResponse(c, {
+            status: 'success',
+            date: dateStr,
+            venue: venueCode,
+            country: matchedMeeting.meetingCountry?.value || '-',
+            races: races
+        });
+
+    } catch (err) {
+        console.warn(`[Overseas CMS Error]: ${err.message}`);
+        return jsonResponse(c, {
+            status: 'error',
+            message: `無法取得海外賽事 CMS 數據: ${err.message}`
+        }, 502);
+    }
+});
+
 export default app;
