@@ -108,56 +108,6 @@ app.get('/api/odds', async (c) => {
                     status: race.status || "SCHEDULED",
                     totalRunners: runners.length,
                     runners: runners
-                };// 2. 核心排位數據 API (已新增 finalPosition 賽果名次)
-app.get('/api/odds', async (c) => {
-    const dateStr = c.req.query('date') || '2026-11-04';
-    const venueCode = c.req.query('venue') || 'HV';
-
-    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
-    const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-            const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
-            const rawData = response.data;
-            const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
-
-            if (!raceMeetings || raceMeetings.length === 0) {
-                return jsonResponse(c, {
-                    status: "no_data",
-                    message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料或排位表。`,
-                    races: []
-                }, 404);
-            }
-
-            const meeting = raceMeetings[0];
-            const racesList = meeting.races || [];
-
-            const formattedRaces = racesList.map(race => {
-                const runners = (race.runners || []).map(r => ({
-                    horseNo: r.no ?? r.saddleClothNo ?? "-",
-                    horseName: r.name_ch || r.name_en || "-",
-                    horseNameEn: r.name_en || "",
-                    draw: r.barrierDrawNumber ?? "-",
-                    weight: r.handicapWeight ?? "-",
-                    rating: r.currentRating ?? "-",
-                    last6run: r.last6run ?? "-",
-                    gearInfo: r.gearInfo ?? "",
-                    jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
-                    trainer: r.trainer?.name_ch || r.trainer?.name_en || "-",
-                    status: r.status || "NORMAL",
-                    finalPosition: r.finalPosition ?? "-", // 💡 官方名次 (未開跑或已被刮掉為 "-")
-                    deadHeat: r.deadHeat ?? false,          // 💡 是否平頭
-                    winOdds: "-",
-                    plaOdds: "-"
-                }));
-
-                return {
-                    raceNo: race.no,
-                    status: race.status || "SCHEDULED",
-                    totalRunners: runners.length,
-                    runners: runners
                 };
             });
 
