@@ -269,7 +269,7 @@ app.get('/api/mutliPool-odds', async (c) => {
     });
 });
 
-// 5. 官方賽果與派彩數據 API
+// 5. 官方賽果與賽事狀況 API (共用已驗證 100% 成功的穩定 racing Query)
 app.get('/api/results', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
@@ -278,31 +278,64 @@ app.get('/api/results', async (c) => {
         return jsonResponse(c, { status: 'error', message: 'Missing date or venue.' }, 400);
     }
 
-    // 馬會官方獲取賽果及派彩的 GraphQL Query
-    const graphqlQuery = `query raceResults($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status venueCode date races{no status raceName_ch raceName_en distance judgeSigns{value_en}runners{no name_ch name_en status finalPosition deadHeat winOdds}pmPools(oddsTypes:[WIN PLA QIN QPL]){oddsType status results{combString dividendValue combination}}}}}`;
-
-    const graphqlVariables = JSON.stringify({
-        date: dateStr,
-        venueCode: venueCode
-    });
-
-    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=raceResults&variables=${encodeURIComponent(graphqlVariables)}`;
+    // 💡 直接使用同 /api/odds 一模一樣、已經通過馬會 WAF 驗證的 Query
+    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status raceName_ch raceName_en runners{id no standbyNo status name_ch name_en finalPosition deadHeat winOdds placeOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
+    const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
             const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
             const rawData = response.data;
+            const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
 
-            if (rawData && !rawData.errors) {
-                return jsonResponse(c, rawData);
+            if (!raceMeetings || raceMeetings.length === 0) {
+                return jsonResponse(c, {
+                    status: "no_data",
+                    message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料。`,
+                    races: []
+                }, 404);
             }
-        } catch (err) {
-            console.warn(`[Results Attempt ${attempt} Failed for ${venueCode} on ${dateStr}]: ${err.message}`);
 
+            const meeting = raceMeetings[0];
+            const racesList = meeting.races || [];
+
+            const formattedRaces = racesList.map(race => {
+                const runners = (race.runners || []).map(r => ({
+                    horseNo: r.no ?? r.saddleClothNo ?? "-",
+                    horseName: r.name_ch || r.name_en || "-",
+                    finalPosition: r.finalPosition ?? "-", // 賽事名次
+                    deadHeat: r.deadHeat ?? false,          // 同名次平頭
+                    status: r.status || "NORMAL",
+                    winOdds: r.winOdds || "-",
+                    placeOdds: r.placeOdds || "-",
+                    jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
+                    trainer: r.trainer?.name_ch || r.trainer?.name_en || "-"
+                }));
+
+                return {
+                    raceNo: race.no,
+                    status: race.status || "SCHEDULED",
+                    totalRunners: runners.length,
+                    runners: runners
+                };
+            });
+
+            return jsonResponse(c, {
+                status: "success",
+                message: `成功取得馬會賽事與賽果數據 (${dateStr})`,
+                meetingDate: dateStr,
+                venue: venueCode,
+                totalRaces: formattedRaces.length,
+                races: formattedRaces
+            });
+
+        } catch (err) {
+            console.warn(`[Results Attempt ${attempt} Failed]: ${err.message}`);
             if (attempt === 2) {
                 return jsonResponse(c, {
-                    status: 'error',
-                    message: '無法取得馬會賽果數據。',
+                    status: "error",
+                    message: "無法取得馬會賽果數據。",
                     errorDetails: err.message
                 }, 502);
             }
@@ -310,4 +343,5 @@ app.get('/api/results', async (c) => {
         }
     }
 });
+
 export default app;
