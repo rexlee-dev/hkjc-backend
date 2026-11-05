@@ -58,7 +58,7 @@ app.get('/api/meetings', (c) => {
     }
 });
 
-// 2. 核心排位數據 API
+// 2. 核心排位數據 API (已新增 finalPosition 賽果名次)
 app.get('/api/odds', async (c) => {
     const dateStr = c.req.query('date') || '2026-11-04';
     const venueCode = c.req.query('venue') || 'HV';
@@ -97,6 +97,8 @@ app.get('/api/odds', async (c) => {
                     jockey: r.jockey?.name_ch || r.jockey?.name_en || "-",
                     trainer: r.trainer?.name_ch || r.trainer?.name_en || "-",
                     status: r.status || "NORMAL",
+                    finalPosition: r.finalPosition ?? "-", // 💡 官方名次 (未開跑或已被刮掉為 "-")
+                    deadHeat: r.deadHeat ?? false,          // 💡 是否平頭
                     winOdds: "-",
                     plaOdds: "-"
                 }));
@@ -111,26 +113,6 @@ app.get('/api/odds', async (c) => {
 
             return jsonResponse(c, {
                 status: "success",
-                message: `成功取得馬會官方排位數據 (${dateStr})`,
-                meetingDate: dateStr,
-                venue: venueCode,
-                totalRaces: formattedRaces.length,
-                races: formattedRaces
-            });
-
-        } catch (err) {
-            console.warn(`[Odds Attempt ${attempt} Failed]: ${err.message}`);
-            if (attempt === 2) {
-                return jsonResponse(c, {
-                    status: "error",
-                    message: "無法取得馬會伺服器數據。",
-                    errorDetails: err.message
-                }, 502);
-            }
-            await new Promise(r => setTimeout(r, 500));
-        }
-    }
-});
 
 // 3. 專用實時賠率 API (使用已驗證 100% 成功的 Query)
 app.get('/api/pool-odds', async (c) => {
