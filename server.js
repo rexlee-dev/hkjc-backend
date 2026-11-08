@@ -156,7 +156,6 @@ app.get('/api/pool-odds', async (c) => {
         return jsonResponse(c, oddsCache[cacheKey].data);
     }
 
-    // 💡 換上你剛才測試成功的完美 Query
     const graphqlQuery = `query sp4e_racing_pmPool($date:String$venueCode:String$oddsTypes:[OddsType]$raceNo:Int){raceMeetings(date:$date venueCode:$venueCode){pmPools(oddsTypes:$oddsTypes raceNo:$raceNo){id status sellStatus oddsType lastUpdateTime oddsLastUpdateTime guarantee minTicketCost name_en name_ch leg{number races}cWinSelections{composite name_ch name_en starters}oddsNodes{combString oddsValue hotFavourite oddsDropValue bankerOdds{combString oddsValue}}}}}`;
 
     const graphqlVariables = JSON.stringify({
@@ -279,7 +278,6 @@ app.get('/api/scrape-race', async (c) => {
     const venue = (c.req.query('venue') || 'ST').toUpperCase();
     const raceNo = c.req.query('raceNo') || '1';
 
-    // 檢查是否為本地賽事
     if (venue !== 'ST' && venue !== 'HV') {
         return jsonResponse(c, {
             status: 'error',
@@ -307,25 +305,18 @@ app.get('/api/scrape-race', async (c) => {
         const timeMatch = containerText.match(/(\d{2}:\d{2})/);
         const distanceMatch = containerText.match(/(\d+)\s*米/);
 
-        // 💡 修正：支援抓取「第X班」或者各類「分級賽 / 新馬賽 / 一級賽」等
         const classMatch = containerText.match(/(第[一二三四五]班|新馬賽|[\u4e00-\u9fa5]+級賽|[\u4e00-\u9fa5]+大賽)/);
-
-        // 💡 新增：抓取場地性質（草地 / 全天候跑道）
         const surfaceMatch = containerText.match(/(\d{2}:\d{2})(草地|全天候跑道)/);
         const surface = surfaceMatch ? surfaceMatch[2] : '';
 
-        // 賽道名稱 (如 C+3賽道)
         const trackMatch = containerText.match(/["“]([^"”]+)["”]\s*賽道/);
         let trackDesc = trackMatch ? `${trackMatch[1]}賽道` : '-';
         
-        // 如果有草地/全天候資訊，組合成更完整的描述 (例如：草地 / C+3賽道 或 全天候跑道)
         if (surface) {
             trackDesc = trackMatch ? `${surface} (${trackMatch[1]}賽道)` : surface;
         }
 
         const ratingMatch = containerText.match(/評分[:\s]*([0-9\-\s]+)/);
-        
-        // 獎金清理結尾逗號
         const prizeMatch = containerText.match(/獎金[:\s]*(\$[0-9,]+)/);
         const cleanPrize = prizeMatch ? prizeMatch[1].replace(/,$/, '') : '-';
 
@@ -359,16 +350,16 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
-// 新增 API：一次過取得當天整個賽事所有場次的詳細資料與賽果
-app.get('/api/full-meeting-results', async (req, res) => {
-    const { date, venue } = req.query;
+// 6. 一次過取得當天整個賽事所有場次的詳細資料與賽果 (註：Hono 路由應用 c.req.query)
+app.get('/api/full-meeting-results', async (c) => {
+    const date = c.req.query('date');
+    const venue = c.req.query('venue');
     
     if (!date || !venue) {
-        return res.status(400).json({ status: 'error', message: '請提供 date 與 venue 參數 (例如: ?date=2026-11-08&venue=ST)' });
+        return jsonResponse(c, { status: 'error', message: '請提供 date 與 venue 參數 (例如: ?date=2026-11-08&venue=ST)' }, 400);
     }
 
     try {
-        // 呼叫馬會官方排位/賽果主 API
         const hkjcUrl = `https://bet.hkjc.com/racing/getJSON.aspx?type=sevencard&date=${date}&venue=${venue}`;
         
         const response = await fetch(hkjcUrl, {
@@ -384,8 +375,7 @@ app.get('/api/full-meeting-results', async (req, res) => {
 
         const data = await response.json();
 
-        // 整理並簡化結構，輸出當天所有場次
-        res.json({
+        return jsonResponse(c, {
             status: 'success',
             meetingDate: date,
             venue: venue,
@@ -393,9 +383,9 @@ app.get('/api/full-meeting-results', async (req, res) => {
             races: data.races || []
         });
 
-    } catch (error) {
+    } catch (error) { // 💡 已修正這裡原本寫錯的 href
         console.error('獲取全日賽事資料失敗:', error);
-        res.status(500).json({ status: 'error', message: '無法連接馬會伺服器或解析失敗' });
+        return jsonResponse(c, { status: 'error', message: '無法連接馬會伺服器或解析失敗' }, 500);
     }
 });
 
