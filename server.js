@@ -350,7 +350,7 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
-// 💡 改用 GraphQL (/api/odds 的底層邏輯) 來一次過取得當天整個賽事所有場次的賽果與狀態
+// 💡 參考 /api/odds 的成功架構，一次過輸出當天全日各場次的賽果與狀態
 app.get('/api/meeting-results', async (c) => {
     const dateStr = c.req.query('date');
     const venueCode = c.req.query('venue');
@@ -359,7 +359,8 @@ app.get('/api/meeting-results', async (c) => {
         return jsonResponse(c, { status: 'error', message: '請提供 date 與 venue 參數 (例如: ?date=2026-11-08&venue=ST)' }, 400);
     }
 
-    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status sellStatus runners{id no standbyNo status name_ch name_en finalPosition deadHeat saddleClothNo}}}}`;
+    // 💡 完美複製 /api/odds 驗證 100% 成功的 Query
+    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status runners{id no standbyNo status name_ch name_en horse{id code}color barrierDrawNumber handicapWeight currentWeight currentRating internationalRating gearInfo racingColorFileName allowance trainerPreference last6run saddleClothNo trumpCard priority finalPosition deadHeat winOdds jockey{code name_en name_ch}trainer{code name_en name_ch}}}}}`;
     const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
     const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
@@ -379,6 +380,7 @@ app.get('/api/meeting-results', async (c) => {
         const meeting = raceMeetings[0];
         const racesList = meeting.races || [];
 
+        // 整理輸出：只保留場次、狀態以及馬匹的名次與基本資料
         const formattedRaces = racesList.map(race => {
             const runners = (race.runners || []).map(r => ({
                 horseNo: r.no ?? r.saddleClothNo ?? "-",
@@ -391,7 +393,6 @@ app.get('/api/meeting-results', async (c) => {
             return {
                 raceNo: race.no,
                 status: race.status || "SCHEDULED",
-                sellStatus: race.sellStatus || "",
                 totalRunners: runners.length,
                 runners: runners
             };
@@ -406,8 +407,9 @@ app.get('/api/meeting-results', async (c) => {
         });
 
     } catch (err) {
-        console.error('獲取全日賽事結果失敗:', err.message);
+        console.error('獲取全日賽果失敗:', err.message);
         return jsonResponse(c, { status: 'error', message: '無法連接馬會伺服器或解析失敗', errorDetails: err.message }, 500);
     }
 });
+
 export default app;
