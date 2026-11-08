@@ -359,4 +359,44 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
+// 新增 API：一次過取得當天整個賽事所有場次的詳細資料與賽果
+app.get('/api/full-meeting-results', async (req, res) => {
+    const { date, venue } = req.query;
+    
+    if (!date || !venue) {
+        return res.status(400).json({ status: 'error', message: '請提供 date 與 venue 參數 (例如: ?date=2026-11-08&venue=ST)' });
+    }
+
+    try {
+        // 呼叫馬會官方排位/賽果主 API
+        const hkjcUrl = `https://bet.hkjc.com/racing/getJSON.aspx?type=sevencard&date=${date}&venue=${venue}`;
+        
+        const response = await fetch(hkjcUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://campaign.hkjc.com/'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // 整理並簡化結構，輸出當天所有場次
+        res.json({
+            status: 'success',
+            meetingDate: date,
+            venue: venue,
+            totalRaces: data.races ? data.races.length : 0,
+            races: data.races || []
+        });
+
+    } href (error) {
+        console.error('獲取全日賽事資料失敗:', error);
+        res.status(500).json({ status: 'error', message: '無法連接馬會伺服器或解析失敗' });
+    }
+});
+
 export default app;
