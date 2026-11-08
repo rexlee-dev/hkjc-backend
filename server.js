@@ -393,7 +393,7 @@ app.get('/api/full-meeting-results', async (req, res) => {
             races: data.races || []
         });
 
-    } href (error) {
+    } catch (error) {
         console.error('獲取全日賽事資料失敗:', error);
         res.status(500).json({ status: 'error', message: '無法連接馬會伺服器或解析失敗' });
     }
