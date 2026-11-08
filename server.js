@@ -350,43 +350,64 @@ app.get('/api/scrape-race', async (c) => {
     }
 });
 
-// 6. 一次過取得當天整個賽事所有場次的詳細資料與賽果 (註：Hono 路由應用 c.req.query)
-app.get('/api/full-meeting-results', async (c) => {
-    const date = c.req.query('date');
-    const venue = c.req.query('venue');
+// 💡 改用 GraphQL (/api/odds 的底層邏輯) 來一次過取得當天整個賽事所有場次的賽果與狀態
+app.get('/api/meeting-results', async (c) => {
+    const dateStr = c.req.query('date');
+    const venueCode = c.req.query('venue');
     
-    if (!date || !venue) {
+    if (!dateStr || !venueCode) {
         return jsonResponse(c, { status: 'error', message: '請提供 date 與 venue 參數 (例如: ?date=2026-11-08&venue=ST)' }, 400);
     }
 
-    try {
-        const hkjcUrl = `https://bet.hkjc.com/racing/getJSON.aspx?type=sevencard&date=${date}&venue=${venue}`;
-        
-        const response = await fetch(hkjcUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://campaign.hkjc.com/'
-            }
-        });
+    const graphqlQuery = `query racing($date:String$venueCode:String){raceMeetings(date:$date venueCode:$venueCode){status currentNumberOfRace totalInvestment races{no status sellStatus runners{id no standbyNo status name_ch name_en finalPosition deadHeat saddleClothNo}}}}`;
+    const graphqlVariables = JSON.stringify({ date: dateStr, venueCode: venueCode });
+    const graphqlUrl = `https://info.cld.hkjc.com/graphql/base-get/?query=${encodeURIComponent(graphqlQuery)}&operationName=racing&variables=${encodeURIComponent(graphqlVariables)}`;
 
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+    try {
+        const response = await axios.get(graphqlUrl, { headers: hkjcHeaders, timeout: 8000 });
+        const rawData = response.data;
+        const raceMeetings = rawData?.data?.raceMeetings || rawData?.raceMeetings || [];
+
+        if (!raceMeetings || raceMeetings.length === 0) {
+            return jsonResponse(c, {
+                status: "no_data",
+                message: `馬會於 ${dateStr} (${venueCode}) 未有賽事資料。`,
+                races: []
+            }, 404);
         }
 
-        const data = await response.json();
+        const meeting = raceMeetings[0];
+        const racesList = meeting.races || [];
 
-        return jsonResponse(c, {
-            status: 'success',
-            meetingDate: date,
-            venue: venue,
-            totalRaces: data.races ? data.races.length : 0,
-            races: data.races || []
+        const formattedRaces = racesList.map(race => {
+            const runners = (race.runners || []).map(r => ({
+                horseNo: r.no ?? r.saddleClothNo ?? "-",
+                horseName: r.name_ch || r.name_en || "-",
+                status: r.status || "NORMAL",
+                finalPosition: r.finalPosition ?? "-", // 官方名次
+                deadHeat: r.deadHeat ?? false           // 是否平頭
+            }));
+
+            return {
+                raceNo: race.no,
+                status: race.status || "SCHEDULED",
+                sellStatus: race.sellStatus || "",
+                totalRunners: runners.length,
+                runners: runners
+            };
         });
 
-    } catch (error) { // 💡 已修正這裡原本寫錯的 href
-        console.error('獲取全日賽事資料失敗:', error);
-        return jsonResponse(c, { status: 'error', message: '無法連接馬會伺服器或解析失敗' }, 500);
+        return jsonResponse(c, {
+            status: "success",
+            meetingDate: dateStr,
+            venue: venueCode,
+            totalRaces: formattedRaces.length,
+            races: formattedRaces
+        });
+
+    } catch (err) {
+        console.error('獲取全日賽事結果失敗:', err.message);
+        return jsonResponse(c, { status: 'error', message: '無法連接馬會伺服器或解析失敗', errorDetails: err.message }, 500);
     }
 });
-
 export default app;
