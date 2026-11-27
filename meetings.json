@@ -1,5 +1,7 @@
 {
   "meetings": [
-    { "date": "2026-11-25", "venue": "HV", "name": "" }
+    { "date": "2026-11-28", "venue": "S1", "name": "" },
+    { "date": "2026-11-28", "venue": "S2", "name": "" },
+    { "date": "2026-11-29", "venue": "ST", "name": "" }
   ]
 }
